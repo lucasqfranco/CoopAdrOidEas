@@ -29,7 +29,7 @@ jobs:
       - name: Normalize Gradle & NDK Configuration and Build Debug APK
         run: |
           python3 - << 'EOF'
-          import os, zipfile, subprocess, shutil
+          import os, zipfile, subprocess, shutil, textwrap
           from pathlib import Path
 
           if not list(Path(".").rglob("settings.gradle.kts")):
@@ -45,172 +45,178 @@ jobs:
               raise SystemExit("ERROR: No se encontró settings.gradle.kts en el repositorio.")
 
           proj_root = settings_files[0].parent.resolve()
+          print(f"Found Android project root at: {proj_root}")
           os.chdir(proj_root)
 
           Path("gradle").mkdir(parents=True, exist_ok=True)
-          Path("gradle/libs.versions.toml").write_text("""[versions]
-          agp = "8.7.3"
-          kotlin = "2.0.21"
-          coreKtx = "1.15.0"
-          junit = "4.13.2"
-          junitVersion = "1.2.1"
-          espressoCore = "3.6.1"
-          lifecycleRuntimeKtx = "2.8.7"
-          lifecycleViewmodelCompose = "2.8.7"
-          lifecycleRuntimeCompose = "2.8.7"
-          activityCompose = "1.9.3"
-          composeBom = "2024.10.01"
-          kotlinxCoroutines = "1.9.0"
-          core = "1.6.1"
-          runner = "1.6.2"
-          okhttp = "4.12.0"
-          robolectric = "4.14.1"
-          firebaseBom = "33.7.0"
+          Path("gradle/libs.versions.toml").write_text(textwrap.dedent("""\
+              [versions]
+              agp = "8.7.3"
+              kotlin = "2.0.21"
+              coreKtx = "1.15.0"
+              junit = "4.13.2"
+              junitVersion = "1.2.1"
+              espressoCore = "3.6.1"
+              lifecycleRuntimeKtx = "2.8.7"
+              lifecycleViewmodelCompose = "2.8.7"
+              lifecycleRuntimeCompose = "2.8.7"
+              activityCompose = "1.9.3"
+              composeBom = "2024.10.01"
+              kotlinxCoroutines = "1.9.0"
+              core = "1.6.1"
+              runner = "1.6.2"
+              okhttp = "4.12.0"
+              robolectric = "4.14.1"
+              firebaseBom = "33.7.0"
 
-          [libraries]
-          androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
-          junit = { group = "junit", name = "junit", version.ref = "junit" }
-          androidx-junit = { group = "androidx.test.ext", name = "junit", version.ref = "junitVersion" }
-          androidx-espresso-core = { group = "androidx.test.espresso", name = "espresso-core", version.ref = "espressoCore" }
-          androidx-lifecycle-runtime-ktx = { group = "androidx.lifecycle", name = "lifecycle-runtime-ktx", version.ref = "lifecycleRuntimeKtx" }
-          androidx-lifecycle-viewmodel-compose = { group = "androidx.lifecycle", name = "lifecycle-viewmodel-compose", version.ref = "lifecycleViewmodelCompose" }
-          androidx-lifecycle-runtime-compose = { group = "androidx.lifecycle", name = "lifecycle-runtime-compose", version.ref = "lifecycleRuntimeCompose" }
-          androidx-activity-compose = { group = "androidx.activity", name = "activity-compose", version.ref = "activityCompose" }
-          androidx-compose-bom = { group = "androidx.compose", name = "compose-bom", version.ref = "composeBom" }
-          androidx-compose-ui = { group = "androidx.compose.ui", name = "ui" }
-          androidx-compose-ui-graphics = { group = "androidx.compose.ui", name = "ui-graphics" }
-          androidx-compose-ui-tooling = { group = "androidx.compose.ui", name = "ui-tooling" }
-          androidx-compose-ui-tooling-preview = { group = "androidx.compose.ui", name = "ui-tooling-preview" }
-          androidx-compose-ui-test-manifest = { group = "androidx.compose.ui", name = "ui-test-manifest" }
-          androidx-compose-ui-test-junit4 = { group = "androidx.compose.ui", name = "ui-test-junit4" }
-          androidx-compose-material3 = { group = "androidx.compose.material3", name = "material3" }
-          androidx-compose-material-icons-core = { group = "androidx.compose.material", name = "material-icons-core" }
-          androidx-compose-material-icons-extended = { group = "androidx.compose.material", name = "material-icons-extended" }
-          kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "kotlinxCoroutines" }
-          kotlinx-coroutines-core = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-core", version.ref = "kotlinxCoroutines" }
-          kotlinx-coroutines-test = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-test", version.ref = "kotlinxCoroutines" }
-          androidx-core = { group = "androidx.test", name = "core", version.ref = "core" }
-          androidx-runner = { group = "androidx.test", name = "runner", version.ref = "runner" }
-          okhttp = { group = "com.squareup.okhttp3", name = "okhttp", version.ref = "okhttp" }
-          robolectric = { group = "org.robolectric", name = "robolectric", version.ref = "robolectric" }
-          firebase-bom = { group = "com.google.firebase", name = "firebase-bom", version.ref = "firebaseBom" }
-          firebase-firestore = { group = "com.google.firebase", name = "firebase-firestore" }
+              [libraries]
+              androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
+              junit = { group = "junit", name = "junit", version.ref = "junit" }
+              androidx-junit = { group = "androidx.test.ext", name = "junit", version.ref = "junitVersion" }
+              androidx-espresso-core = { group = "androidx.test.espresso", name = "espresso-core", version.ref = "espressoCore" }
+              androidx-lifecycle-runtime-ktx = { group = "androidx.lifecycle", name = "lifecycle-runtime-ktx", version.ref = "lifecycleRuntimeKtx" }
+              androidx-lifecycle-viewmodel-compose = { group = "androidx.lifecycle", name = "lifecycle-viewmodel-compose", version.ref = "lifecycleViewmodelCompose" }
+              androidx-lifecycle-runtime-compose = { group = "androidx.lifecycle", name = "lifecycle-runtime-compose", version.ref = "lifecycleRuntimeCompose" }
+              androidx-activity-compose = { group = "androidx.activity", name = "activity-compose", version.ref = "activityCompose" }
+              androidx-compose-bom = { group = "androidx.compose", name = "compose-bom", version.ref = "composeBom" }
+              androidx-compose-ui = { group = "androidx.compose.ui", name = "ui" }
+              androidx-compose-ui-graphics = { group = "androidx.compose.ui", name = "ui-graphics" }
+              androidx-compose-ui-tooling = { group = "androidx.compose.ui", name = "ui-tooling" }
+              androidx-compose-ui-tooling-preview = { group = "androidx.compose.ui", name = "ui-tooling-preview" }
+              androidx-compose-ui-test-manifest = { group = "androidx.compose.ui", name = "ui-test-manifest" }
+              androidx-compose-ui-test-junit4 = { group = "androidx.compose.ui", name = "ui-test-junit4" }
+              androidx-compose-material3 = { group = "androidx.compose.material3", name = "material3" }
+              androidx-compose-material-icons-core = { group = "androidx.compose.material", name = "material-icons-core" }
+              androidx-compose-material-icons-extended = { group = "androidx.compose.material", name = "material-icons-extended" }
+              kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "kotlinxCoroutines" }
+              kotlinx-coroutines-core = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-core", version.ref = "kotlinxCoroutines" }
+              kotlinx-coroutines-test = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-test", version.ref = "kotlinxCoroutines" }
+              androidx-core = { group = "androidx.test", name = "core", version.ref = "core" }
+              androidx-runner = { group = "androidx.test", name = "runner", version.ref = "runner" }
+              okhttp = { group = "com.squareup.okhttp3", name = "okhttp", version.ref = "okhttp" }
+              robolectric = { group = "org.robolectric", name = "robolectric", version.ref = "robolectric" }
+              firebase-bom = { group = "com.google.firebase", name = "firebase-bom", version.ref = "firebaseBom" }
+              firebase-firestore = { group = "com.google.firebase", name = "firebase-firestore" }
 
-          [plugins]
-          android-application = { id = "com.android.application", version.ref = "agp" }
-          kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
-          kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
-          """)
+              [plugins]
+              android-application = { id = "com.android.application", version.ref = "agp" }
+              kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
+              kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
+          """))
 
-          Path("build.gradle.kts").write_text("""plugins {
-            alias(libs.plugins.android.application) apply false
-            alias(libs.plugins.kotlin.android) apply false
-            alias(libs.plugins.kotlin.compose) apply false
-          }
-          """)
-
-          Path("gradle.properties").write_text("""org.gradle.jvmargs=-Xmx4g -Dfile.encoding=UTF-8
-          org.gradle.parallel=true
-          kotlin.code.style=official
-          android.useAndroidX=true
-          android.nonTransitiveRClass=true
-          """)
-
-          has_cpp = Path("app/src/main/cpp/CMakeLists.txt").exists()
-          ndk_block = '''
-            externalNativeBuild {
-              cmake {
-                path = file("src/main/cpp/CMakeLists.txt")
+          Path("build.gradle.kts").write_text(textwrap.dedent("""\
+              plugins {
+                alias(libs.plugins.android.application) apply false
+                alias(libs.plugins.kotlin.android) apply false
+                alias(libs.plugins.kotlin.compose) apply false
               }
-            }''' if has_cpp else ''
+          """))
 
-          Path("app/build.gradle.kts").write_text(f"""plugins {{
-            alias(libs.plugins.android.application)
-            alias(libs.plugins.kotlin.android)
-            alias(libs.plugins.kotlin.compose)
-          }}
+          Path("gradle.properties").write_text(textwrap.dedent("""\
+              org.gradle.jvmargs=-Xmx4g -Dfile.encoding=UTF-8
+              org.gradle.parallel=true
+              kotlin.code.style=official
+              android.useAndroidX=true
+              android.nonTransitiveRClass=true
+          """))
 
-          android {{
-            namespace = "com.example"
-            compileSdk = 35
+          app_gradle = textwrap.dedent("""\
+              plugins {
+                alias(libs.plugins.android.application)
+                alias(libs.plugins.kotlin.android)
+                alias(libs.plugins.kotlin.compose)
+              }
 
-            defaultConfig {{
-              applicationId = "com.aistudio.coopandreas.qxfzkw"
-              minSdk = 24
-              targetSdk = 35
-              versionCode = 6
-              versionName = "2.2"
-              testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-              ndk {{
-                abiFilters += listOf("arm64-v8a", "armeabi-v7a")
-              }}
-            }}
-          {ndk_block}
-            signingConfigs {{
-              create("debugConfig") {{
-                storeFile = file("${{rootDir}}/debug.keystore")
-                storePassword = "android"
-                keyAlias = "androiddebugkey"
-                keyPassword = "android"
-              }}
-            }}
+              android {
+                namespace = "com.example"
+                compileSdk = 35
 
-            buildTypes {{
-              debug {{
-                signingConfig = signingConfigs.getByName("debugConfig")
-              }}
-              release {{
-                isMinifyEnabled = false
-                signingConfig = signingConfigs.getByName("debugConfig")
-              }}
-            }}
-            compileOptions {{
-              sourceCompatibility = JavaVersion.VERSION_11
-              targetCompatibility = JavaVersion.VERSION_11
-            }}
-            kotlinOptions {{
-              jvmTarget = "11"
-            }}
-            buildFeatures {{
-              compose = true
-              buildConfig = true
-            }}
-            packaging {{
-              jniLibs {{
-                useLegacyPackaging = true
-              }}
-            }}
-            testOptions {{ unitTests {{ isIncludeAndroidResources = true }} }}
-          }}
+                defaultConfig {
+                  applicationId = "com.aistudio.coopandreas.qxfzkw"
+                  minSdk = 24
+                  targetSdk = 35
+                  versionCode = 6
+                  versionName = "2.2"
+                  testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+                  ndk {
+                    abiFilters += listOf("arm64-v8a", "armeabi-v7a")
+                  }
+                }
 
-          dependencies {{
-            implementation(platform(libs.androidx.compose.bom))
-            implementation(platform(libs.firebase.bom))
-            implementation(libs.androidx.activity.compose)
-            implementation(libs.androidx.compose.material.icons.core)
-            implementation(libs.androidx.compose.material.icons.extended)
-            implementation(libs.androidx.compose.material3)
-            implementation(libs.androidx.compose.ui)
-            implementation(libs.androidx.compose.ui.graphics)
-            implementation(libs.androidx.compose.ui.tooling.preview)
-            implementation(libs.androidx.core.ktx)
-            implementation(libs.androidx.lifecycle.runtime.compose)
-            implementation(libs.androidx.lifecycle.runtime.ktx)
-            implementation(libs.androidx.lifecycle.viewmodel.compose)
-            implementation(libs.firebase.firestore)
-            implementation(libs.kotlinx.coroutines.android)
-            implementation(libs.kotlinx.coroutines.core)
-            implementation(libs.okhttp)
-            testImplementation(libs.androidx.compose.ui.test.junit4)
-            testImplementation(libs.androidx.core)
-            testImplementation(libs.androidx.junit)
-            testImplementation(libs.junit)
-            testImplementation(libs.kotlinx.coroutines.test)
-            testImplementation(libs.robolectric)
-            debugImplementation(libs.androidx.compose.ui.test.manifest)
-            debugImplementation(libs.androidx.compose.ui.tooling)
-          }}
+                externalNativeBuild {
+                  cmake {
+                    path = file("src/main/cpp/CMakeLists.txt")
+                  }
+                }
+
+                signingConfigs {
+                  create("debugConfig") {
+                    storeFile = rootProject.file("debug.keystore")
+                    storePassword = "android"
+                    keyAlias = "androiddebugkey"
+                    keyPassword = "android"
+                  }
+                }
+
+                buildTypes {
+                  debug {
+                    signingConfig = signingConfigs.getByName("debugConfig")
+                  }
+                  release {
+                    isMinifyEnabled = false
+                    signingConfig = signingConfigs.getByName("debugConfig")
+                  }
+                }
+                compileOptions {
+                  sourceCompatibility = JavaVersion.VERSION_11
+                  targetCompatibility = JavaVersion.VERSION_11
+                }
+                kotlinOptions {
+                  jvmTarget = "11"
+                }
+                buildFeatures {
+                  compose = true
+                  buildConfig = true
+                }
+                packaging {
+                  jniLibs {
+                    useLegacyPackaging = true
+                  }
+                }
+                testOptions { unitTests { isIncludeAndroidResources = true } }
+              }
+
+              dependencies {
+                implementation(platform(libs.androidx.compose.bom))
+                implementation(platform(libs.firebase.bom))
+                implementation(libs.androidx.activity.compose)
+                implementation(libs.androidx.compose.material.icons.core)
+                implementation(libs.androidx.compose.material.icons.extended)
+                implementation(libs.androidx.compose.material3)
+                implementation(libs.androidx.compose.ui)
+                implementation(libs.androidx.compose.ui.graphics)
+                implementation(libs.androidx.compose.ui.tooling.preview)
+                implementation(libs.androidx.core.ktx)
+                implementation(libs.androidx.lifecycle.runtime.compose)
+                implementation(libs.androidx.lifecycle.runtime.ktx)
+                implementation(libs.androidx.lifecycle.viewmodel.compose)
+                implementation(libs.firebase.firestore)
+                implementation(libs.kotlinx.coroutines.android)
+                implementation(libs.kotlinx.coroutines.core)
+                implementation(libs.okhttp)
+                testImplementation(libs.androidx.compose.ui.test.junit4)
+                testImplementation(libs.androidx.core)
+                testImplementation(libs.androidx.junit)
+                testImplementation(libs.junit)
+                testImplementation(libs.kotlinx.coroutines.test)
+                testImplementation(libs.robolectric)
+                debugImplementation(libs.androidx.compose.ui.test.manifest)
+                debugImplementation(libs.androidx.compose.ui.tooling)
+              }
           """)
+          if not Path("app/src/main/cpp/CMakeLists.txt").exists():
+              app_gradle = app_gradle.replace('  externalNativeBuild {\n    cmake {\n      path = file("src/main/cpp/CMakeLists.txt")\n    }\n  }\n', "")
+          Path("app/build.gradle.kts").write_text(app_gradle)
 
           if not Path("debug.keystore").exists():
               subprocess.run([
@@ -229,6 +235,7 @@ jobs:
           out_dir.mkdir(parents=True, exist_ok=True)
           apk_path = Path("app/build/outputs/apk/debug/app-debug.apk")
           shutil.copy2(apk_path, out_dir / "CoopAndreas-debug.apk")
+          print("APK compilado exitosamente en:", out_dir / "CoopAndreas-debug.apk")
           EOF
 
       - name: Upload Compiled CoopAndreas Debug APK
