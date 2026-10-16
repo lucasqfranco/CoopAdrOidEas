@@ -1,13 +1,26 @@
 # CoopAndreas (CoopAdrOidEas) 🚗💥
 
 [![Build CoopAndreas Debug APK](https://github.com/lucasqfranco/CoopAdrOidEas/actions/workflows/build-apk.yml/badge.svg)](https://github.com/lucasqfranco/CoopAdrOidEas/actions/workflows/build-apk.yml)
+[![Status: Experimental / Pre-Alpha](https://img.shields.io/badge/Status-Experimental%20%2F%20Pre--Alpha-yellow.svg)](#-estado-del-proyecto-experimental--pre-alfa-wip)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 [![Platform: Android](https://img.shields.io/badge/Platform-Android%207.0%2B%20(ARM64%20%2F%20ARMv7)-green.svg)](https://developer.android.com)
 [![Target: GTA San Andreas Mobile](https://img.shields.io/badge/GTA%20SA-v2.00%20%2F%20v2.10-orange.svg)](https://rockstargames.com)
 
 **Mod cooperativo multijugador nativo y aplicación companion para Grand Theft Auto: San Andreas en Android.**
 
-CoopAdrOidEas permite revivir la experiencia completa de GTA San Andreas en modo multijugador cooperativo en dispositivos móviles: jugá misiones de historia de la campaña o recorré todo el estado en modo libre con amigos a través de **Wi-Fi LAN** o conexión **Online**, con **cámaras 3D independientes** (sin las limitaciones de pantalla dividida ni restricciones de proximidad de PS2).
+CoopAdrOidEas permite revivir la experiencia de GTA San Andreas en modo multijugador cooperativo en dispositivos móviles: jugá misiones de historia de la campaña o recorré el estado en modo libre con amigos a través de **Wi-Fi LAN** o conexión **Online**, con **cámaras 3D independientes** (sin las limitaciones de pantalla dividida ni restricciones de proximidad de PS2).
+
+---
+
+> ⚠️ **ESTADO DEL PROYECTO: EXPERIMENTAL / PRE-ALFA (WORK IN PROGRESS)**
+> 
+> **Este proyecto es un desarrollo en curso, altamente experimental y concebido como una prueba de concepto técnica (PoC).**  
+> **NO es una versión final, completa ni estable, ni se encuentra cerca de serlo todavía.**
+> 
+> - **Fase de desarrollo**: Pre-Alfa temprana / Prototipo en evolución constante (*WIP*).
+> - **Inestabilidad esperada**: Es común y esperado experimentar desincronizaciones de red (*desyncs*), glitches visuales en animaciones o vehículos, congelamientos de cinemáticas o cierres inesperados (*crashes*) en ciertas misiones y configuraciones de hardware.
+> - **Propósito open-source**: Se comparte abiertamente con la comunidad con el fin de **investigación, colaboración técnica y experimentación comunitaria**. Buscamos que otros desarrolladores, modders y entusiastas de la ingeniería inversa puedan auditar el código, probar la telemetría y sumar mejoras.
+> - **Expectativas para usuarios**: Si buscás una experiencia de juego comercial pulida de inicio a fin sin errores, el proyecto aún no está en ese punto. Tu paciencia, pruebas y reportes en [Issues](https://github.com/lucasqfranco/CoopAdrOidEas/issues) son lo que ayuda a hacerlo avanzar.
 
 ---
 
@@ -21,6 +34,22 @@ CoopAdrOidEas permite revivir la experiencia completa de GTA San Andreas en modo
 - 🎭 **Selector de Skins Interactivo**: Interfaz visual de lobby para seleccionar personajes clásicos (Carl 'CJ' Johnson, Sweet, Ryder, Big Smoke, miembros de Grove Street y modelos personalizados).
 - 🌐 **Soporte LAN y Online**: Autodescubrimiento sin configuración en redes locales Wi-Fi (UDP broadcast) y conexión por Código de Sala (*Room Code*) o IP directa para jugar mediante VPN (ZeroTier, Tailscale) o reenvío de puertos.
 - 🛡️ **Motor de Diagnóstico e Instalador CLEO Automático**: Comprobador integrado de integridad que verifica rutas de juego (`com.rockstargames.gtasa`), bibliotecas nativas, permisos de almacenamiento y despliega los scripts `.csa` con un solo toque.
+
+---
+
+## ⚠️ Limitaciones Conocidas y Estado Actual (Known Limitations)
+
+Como proyecto experimental en fase Pre-Alfa, existen limitaciones técnicas conocidas en las que se está trabajando activamente:
+
+1. **Cinemáticas y Misiones con Guiones Complejos**:
+   - Misiones que toman el control forzado de la cámara (*cutscenes* dentro del motor) pueden causar desincronización temporal entre el Host y el Guest.
+   - Las misiones que emplean minijuegos específicos (misiones de baile, suspensión hidráulica de lowriders o misiones de vehículos a radiocontrol RC) requieren opcodes adicionales aún no finalizados.
+2. **Tolerancia a Latencia en Conexiones Online**:
+   - En redes locales Wi-Fi (LAN) la telemetría es altamente fluida. En partidas Online mediante internet público o VPN, fluctuaciones de ping o pérdida de paquetes UDP pueden generar *rubberbanding* o desfasajes de posición.
+3. **Variabilidad de Dispositivos y Versiones de GTA**:
+   - El mod está optimizado primariamente para GTA San Andreas v2.00 / v2.10. Versiones modificadas de terceros, APKs no estándar o incompatibilidades con GPUs específicas (Mali vs Adreno) pueden provocar cierres repentinos al inyectar las librerías CLEO.
+4. **Guardado de Progreso**:
+   - Se recomienda utilizar partidas guardadas de respaldo, ya que la ejecución de scripts cooperativos experimentales podría corromper el slot de guardado en caso de un crash durante una misión.
 
 ---
 
@@ -90,7 +119,7 @@ Agradecimientos especiales también a:
 ### Paso a Paso para Usuarios Finales:
 
 1. **Descargar el APK**:
-   - Descargá la versión más reciente de `CoopAndreas-debug.apk` desde la sección de **[Releases](../../releases)** o desde los artefactos de **GitHub Actions**.
+   - Descargá la versión experimental más reciente de `CoopAndreas-debug.apk` desde la sección de **[Releases](../../releases)** o desde los artefactos de **GitHub Actions**.
 2. **Instalar y Abrir la Aplicación Companion**:
    - Instalá el APK en tu dispositivo y otorgá los permisos de almacenamiento y micrófono (necesarios para el chat de voz Walkie-Talkie).
 3. **Ejecutar el Diagnóstico**:
@@ -101,7 +130,7 @@ Agradecimientos especiales también a:
    - **Host (Anfitrión)**: Seleccioná "Crear Sala", elegí tu skin y compartí el código de sala o tu IP local.
    - **Invitado (Guest)**: Tocá "Unirse a Sala", ingresá la IP del Host o utilizá el botón de autodescubrimiento LAN.
 6. **Iniciar el Juego**:
-   - Presioná **"Lanzar GTA San Andreas"** desde el companion. ¡Disfrutá de la historia cooperativa!
+   - Presioná **"Lanzar GTA San Andreas"** desde el companion. ¡A probar el modo cooperativo!
 
 ---
 

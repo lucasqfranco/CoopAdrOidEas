@@ -1,6 +1,12 @@
 # Guía de Contribución a CoopAndreas (CoopAdrOidEas) 🤝
 
-¡Gracias por tu interés en contribuir a **CoopAndreas Android**! Este proyecto es de código abierto y busca llevar la mejor experiencia cooperativa de GTA San Andreas a la comunidad móvil. Todas las contribuciones (código, pruebas en dispositivos, documentación, reporte de bugs o sincronización de misiones específicas) son bienvenidas.
+¡Gracias por tu interés en contribuir a **CoopAndreas Android**! Este proyecto es de código abierto y busca llevar la mejor experiencia cooperativa de GTA San Andreas a la comunidad móvil.
+
+---
+
+> ⚠️ **RECORDATORIO: PROYECTO EN FASE EXPERIMENTAL (PRE-ALFA / WIP)**
+> CoopAndreas para Android es una prueba de concepto técnica en evolución. **No es una versión final, completa ni estable**.
+> La meta actual de la comunidad de desarrollo es identificar cuellos de botella, diagnosticar misiones con desincronización, refinar los opcodes C++ y robustecer el protocolo UDP. Si encontrás fallas, ¡tu reporte técnico o PR es exactamente lo que el proyecto necesita!
 
 ---
 
