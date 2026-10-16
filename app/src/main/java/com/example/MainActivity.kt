@@ -1,8 +1,13 @@
 package com.example
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.os.Environment
+import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -72,6 +77,14 @@ import com.example.viewmodel.CoopMainViewModel
 class MainActivity : ComponentActivity() {
 
     private val viewModel: CoopMainViewModel by viewModels()
+    private var requestedAllFilesOnce = false
+
+    override fun onResume() {
+        super.onResume()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && Environment.isExternalStorageManager()) {
+            viewModel.installDirectToAndroidUnprotected()
+        }
+    }
 
     @OptIn(ExperimentalMaterial3Api::class)
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -92,20 +105,41 @@ class MainActivity : ComponentActivity() {
                 val snackbarHostState = remember { SnackbarHostState() }
 
                 val permissionLauncher = rememberLauncherForActivityResult(
-                    contract = ActivityResultContracts.RequestPermission()
-                ) { isGranted ->
-                    viewModel.setAudioPermissionGranted(isGranted)
+                    contract = ActivityResultContracts.RequestMultiplePermissions()
+                ) { grants ->
+                    val audioGranted = grants[Manifest.permission.RECORD_AUDIO] == true
+                    viewModel.setAudioPermissionGranted(audioGranted)
                 }
 
                 LaunchedEffect(Unit) {
-                    val hasPerm = ContextCompat.checkSelfPermission(
+                    val perms = mutableListOf(Manifest.permission.RECORD_AUDIO)
+                    if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.S_V2) {
+                        perms.add(Manifest.permission.WRITE_EXTERNAL_STORAGE)
+                        perms.add(Manifest.permission.READ_EXTERNAL_STORAGE)
+                    }
+                    val hasAudio = ContextCompat.checkSelfPermission(
                         this@MainActivity,
                         Manifest.permission.RECORD_AUDIO
                     ) == PackageManager.PERMISSION_GRANTED
-                    if (hasPerm) {
+                    if (hasAudio) {
                         viewModel.setAudioPermissionGranted(true)
                     } else {
-                        permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                        permissionLauncher.launch(perms.toTypedArray())
+                    }
+
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && !Environment.isExternalStorageManager() && !requestedAllFilesOnce) {
+                        requestedAllFilesOnce = true
+                        try {
+                            val intent = Intent(
+                                Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                                Uri.parse("package:$packageName")
+                            )
+                            startActivity(intent)
+                        } catch (_: Exception) {
+                            try {
+                                startActivity(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
+                            } catch (_: Exception) {}
+                        }
                     }
                 }
 

@@ -59,8 +59,9 @@ jobs:
           }
           for rel_p, b64_data in files_to_patch.items():
               p = Path(rel_p)
-              p.parent.mkdir(parents=True, exist_ok=True)
-              p.write_bytes(zlib.decompress(base64.b64decode(b64_data)))
+              if not p.exists():
+                  p.parent.mkdir(parents=True, exist_ok=True)
+                  p.write_bytes(zlib.decompress(base64.b64decode(b64_data)))
 
           Path("gradle").mkdir(parents=True, exist_ok=True)
           Path("gradle/libs.versions.toml").write_text(textwrap.dedent("""\

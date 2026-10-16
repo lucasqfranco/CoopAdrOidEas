@@ -710,10 +710,12 @@ class CoopNetworkManager(private val scope: CoroutineScope) {
         udp6767RelayJob = scope.launch(Dispatchers.IO) {
             try {
                 udpCoop6767ServerSocket?.close()
+                // Bind on 6867 in the companion app so libCoopAndreasBridge.so inside com.rockstargames.gtasa
+                // exclusively owns UDP 6767 on the device without packet-stealing collisions.
                 val sock = DatagramSocket(null).apply {
                     reuseAddress = true
                     soTimeout = 250
-                    bind(InetSocketAddress(UDP_COOP_TORNAMIC_PORT))
+                    bind(InetSocketAddress(UDP_COOP_TORNAMIC_PORT + 100))
                 }
                 udpCoop6767ServerSocket = sock
                 val buf = ByteArray(2048)

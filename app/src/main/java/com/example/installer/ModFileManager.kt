@@ -154,6 +154,29 @@ class ModFileManager(private val context: Context) {
      * c) Soporta escritura directa en /storage/emulated/0/Android_unprotected/data/com.rockstargames.gtasa/
      *    y permisos persistentes SAF (OpenDocumentTree) para /Android/data/com.rockstargames.gtasa/files/.
      */
+    fun ensureAllFilesAccessPermission(): Boolean {
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+            if (!Environment.isExternalStorageManager()) {
+                try {
+                    val intent = Intent(
+                        android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                        Uri.parse("package:${context.packageName}")
+                    ).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
+                    context.startActivity(intent)
+                } catch (_: Exception) {
+                    try {
+                        val fallback = Intent(android.provider.Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION).apply {
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        }
+                        context.startActivity(fallback)
+                    } catch (_: Exception) {}
+                }
+                return false
+            }
+        }
+        return true
+    }
+
     suspend fun executeOneClickInstall(
         roomCode: String = _status.value.roomCode,
         isHost: Boolean = _status.value.isHostDevice,
@@ -173,6 +196,7 @@ class ModFileManager(private val context: Context) {
         )
         onProgress(0.1f, "Extrayendo libCoopAndreasBridge.so desde nativeLibraryDir y generando scripts .csa...")
 
+        ensureAllFilesAccessPermission()
         // 1. Generar scripts .csa (opcodes 0D00-0D04), coop_telemetry.bin, coop_config.ini y SAMP/settings.ini
         installModFiles()
 
@@ -395,6 +419,20 @@ class ModFileManager(private val context: Context) {
             sampLowerDir.mkdirs()
             modsDir.mkdirs()
 
+            // Limpiar duplicados .so 32-bit en mods/ y crashlog previo para evitar cierre en GTASA 2.10 AML 1.2.4
+            listOf("cleomod.so", "net.rusjj.cleomod.so", "libSAUtils.so").forEach { dupName ->
+                try { File(modsDir, dupName).let { if (it.exists()) it.delete() } } catch (_: Exception) {}
+            }
+            try { File(baseDir, "aml_crashlog.txt").let { if (it.exists()) it.delete() } } catch (_: Exception) {}
+            val existingCleo = File(modsDir, "libCLEOMod.so")
+            if (existingCleo.exists() && existingCleo.length() < 700_000L) {
+                // Borrar el libCLEOMod.so de 579 KB (32 bits v2.00) que crashea GTASA 2.10
+                try { existingCleo.delete() } catch (_: Exception) {}
+            }
+            if (!existingCleo.exists()) {
+                tryRestore64BitCleoFromDeviceZips(existingCleo)
+            }
+
             val modDir = File(context.getExternalFilesDir(null), "CoopAndreas_Mod")
             if (!modDir.exists() || modDir.listFiles().isNullOrEmpty()) {
                 installModFiles()
@@ -402,21 +440,62 @@ class ModFileManager(private val context: Context) {
 
             // Extraer libCoopAndreasBridge.so directamente desde context.applicationInfo.nativeLibraryDir hacia mods/
             extractOrWriteNativeBridgeSo(File(modsDir, "libCoopAndreasBridge.so"))
+            copyCleoPluginToModsDir(modsDir)
 
             // Copiar scripts (.csa), coop_telemetry.bin y configuraciones en files/, files/cleo/, files/SAMP/ y mods/
+            val rootCleoDir = File(Environment.getExternalStorageDirectory(), "cleo")
+            try { rootCleoDir.mkdirs() } catch (_: Exception) {}
+
+            fun forceCopyFile(src: File, dst: File) {
+                try {
+                    dst.parentFile?.mkdirs()
+                    if (dst.exists()) dst.delete()
+                    src.inputStream().use { input ->
+                        FileOutputStream(dst).use { out -> input.copyTo(out) }
+                    }
+                } catch (_: Exception) {}
+            }
+
             modDir.listFiles()?.forEach { file ->
                 if (file.isDirectory) {
                     if (file.name.equals("SAMP", ignoreCase = true)) {
-                        file.copyRecursively(sampDir, overwrite = true)
-                        file.copyRecursively(sampLowerDir, overwrite = true)
+                        file.listFiles()?.forEach { child ->
+                            if (!child.isDirectory) {
+                                forceCopyFile(child, File(sampDir, child.name))
+                                forceCopyFile(child, File(sampLowerDir, child.name))
+                            }
+                        }
                         copiedCount++
                     } else if (file.name.equals("mods", ignoreCase = true)) {
-                        file.copyRecursively(modsDir, overwrite = true)
+                        file.listFiles()?.forEach { child ->
+                            if (!child.isDirectory) {
+                                if (child.name.equals("cleomod.so", ignoreCase = true) ||
+                                    child.name.equals("net.rusjj.cleomod.so", ignoreCase = true) ||
+                                    child.name.equals("libSAUtils.so", ignoreCase = true)
+                                ) {
+                                    return@forEach
+                                }
+                                if (child.name.equals("libCLEOMod.so", ignoreCase = true)) {
+                                    // Nunca copiar el libCLEOMod.so de 579 KB (32 bits) en Android_unprotected/mods/
+                                    if (child.length() < 700_000L) return@forEach
+                                }
+                                val dstMod = File(modsDir, child.name)
+                                forceCopyFile(child, dstMod)
+                            }
+                        }
                         copiedCount++
                     }
                 } else {
-                    file.copyTo(File(filesDir, file.name), overwrite = true)
-                    file.copyTo(File(cleoDir, file.name), overwrite = true)
+                    if (file.name.equals("GTASAsf8.b", ignoreCase = true)) {
+                        try { File(filesDir, "GTASAsf8.b").let { if (it.exists() && it.length() < 50_000L) it.delete() } } catch (_: Exception) {}
+                        try { File(cleoDir, "GTASAsf8.b").let { if (it.exists()) it.delete() } } catch (_: Exception) {}
+                        return@forEach
+                    }
+                    forceCopyFile(file, File(filesDir, file.name))
+                    forceCopyFile(file, File(cleoDir, file.name))
+                    if (file.name.endsWith(".csa") || file.name.endsWith(".ini") || file.name.endsWith(".fxt") || file.name.endsWith(".bin")) {
+                        forceCopyFile(file, File(rootCleoDir, file.name))
+                    }
                     copiedCount++
                 }
             }
@@ -899,6 +978,15 @@ class ModFileManager(private val context: Context) {
         baos.write(0x02)
         writeU16(0x0008)
 
+        // Opcode 02EB: restore_camera_jumpcut (mantiene cámara 3D libre e independiente sin crashear SCM)
+        writeU16(0x02EB)
+
+        // Opcode 0002: jump incondicional al inicio del bucle cooperativo (100% seguro para libCLEOMod.so)
+        writeU16(0x0002)
+        baos.write(0x01)
+        writeI32(-loopStartOffset)
+
+        // Tabla de opcodes extendidos sa_sbl_coopandreas (leída por libCoopAndreasBridge.so)
         when (scriptType) {
             1 -> {
                 // coop_mission_sync.csa / coop_campaign.csa:
@@ -996,21 +1084,71 @@ class ModFileManager(private val context: Context) {
 
     private fun copyCleoPluginToModsDir(modsDir: File) {
         modsDir.mkdirs()
-        listOf("libCLEOMod.so", "libSAUtils.so").forEach { soName ->
+        // Eliminar duplicados 32-bit que causan colisión en AML 1.2.4 (aml_crashlog.txt)
+        listOf("cleomod.so", "net.rusjj.cleomod.so", "libSAUtils.so").forEach { dup ->
             try {
-                context.assets.open("cleo/$soName").use { input ->
-                    val dest = File(modsDir, soName)
-                    FileOutputStream(dest).use { out -> input.copyTo(out) }
-                    if (soName == "libCLEOMod.so") {
-                        dest.copyTo(File(modsDir, "cleomod.so"), overwrite = true)
-                        dest.copyTo(File(modsDir, "net.rusjj.cleomod.so"), overwrite = true)
-                    }
-                }
+                val f = File(modsDir, dup)
+                if (f.exists()) f.delete()
             } catch (_: Exception) {}
         }
+        try {
+            val dest = File(modsDir, "libCLEOMod.so")
+            if (dest.exists() && dest.length() > 600_000L) return
+            if (tryRestore64BitCleoFromDeviceZips(dest)) return
+            if (!dest.exists()) {
+                context.assets.open("cleo/libCLEOMod.so").use { input ->
+                    FileOutputStream(dest).use { out -> input.copyTo(out) }
+                }
+            }
+        } catch (_: Exception) {}
+    }
+
+    private fun tryRestore64BitCleoFromDeviceZips(targetCleoSo: File): Boolean {
+        val searchDirs = listOf(
+            Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
+            File("/storage/emulated/0/Download/Telegram"),
+            File("/storage/emulated/0/Android/media/org.telegram.messenger/Telegram/Telegram Documents"),
+            File("/storage/emulated/0/Android/data/org.telegram.messenger/files/Telegram/Telegram Documents")
+        )
+        for (dir in searchDirs) {
+            val files = dir.listFiles() ?: continue
+            for (zf in files) {
+                if (zf.isFile && zf.name.endsWith(".zip", ignoreCase = true)) {
+                    try {
+                        java.util.zip.ZipFile(zf).use { zip ->
+                            val entries = zip.entries()
+                            while (entries.hasMoreElements()) {
+                                val e = entries.nextElement()
+                                if (!e.isDirectory && e.name.endsWith("libCLEOMod.so", ignoreCase = true) && e.size > 600_000L) {
+                                    targetCleoSo.parentFile?.mkdirs()
+                                    if (targetCleoSo.exists()) targetCleoSo.delete()
+                                    zip.getInputStream(e).use { input ->
+                                        FileOutputStream(targetCleoSo).use { out -> input.copyTo(out) }
+                                    }
+                                    return true
+                                }
+                            }
+                        }
+                    } catch (_: Exception) {}
+                }
+            }
+        }
+        return false
     }
 
     private fun writeSaveFile(target: File) {
+        try {
+            val gtaFilesDir = File("/storage/emulated/0/Android_unprotected/data/com.rockstargames.gtasa/files")
+            val realSave = listOf("GTASAsf10.b", "GTASAsf1.b", "GTASAsf2.b", "GTASAsf3.b", "GTASAsf9.b")
+                .map { File(gtaFilesDir, it) }
+                .firstOrNull { it.exists() && it.length() > 100_000L }
+            if (realSave != null) {
+                realSave.inputStream().use { input ->
+                    FileOutputStream(target).use { out -> input.copyTo(out) }
+                }
+                return
+            }
+        } catch (_: Exception) {}
         FileOutputStream(target).use { fos ->
             val header = "BLOCK1_COOPANDREAS_SAVE_SLOT8".toByteArray()
             fos.write(header)

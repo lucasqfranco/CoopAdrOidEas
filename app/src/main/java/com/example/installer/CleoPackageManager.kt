@@ -100,8 +100,7 @@ class CleoPackageManager(private val context: Context) {
                         if (cleoSoFile != null && cleoSoFile.length() > 1000) {
                             val targetMod = File(modsDir, "libCLEOMod.so")
                             cleoSoFile.copyTo(targetMod, overwrite = true)
-                            cleoSoFile.copyTo(File(modsDir, "cleomod.so"), overwrite = true)
-                            cleoSoFile.copyTo(File(modsDir, "net.rusjj.cleomod.so"), overwrite = true)
+                            // Único libCLEOMod.so en mods/
                             cleoSoFile.copyTo(File(amlDir, "cleomod.so"), overwrite = true)
                             cleoSoFile.delete()
 
@@ -189,6 +188,15 @@ class CleoPackageManager(private val context: Context) {
             val name = entry.name.replace('\\', '/')
             if (!entry.isDirectory && !name.contains("__MACOSX")) {
                 val cleanFileName = File(name).name
+                if (cleanFileName.equals("cleomod.so", ignoreCase = true) ||
+                    cleanFileName.equals("net.rusjj.cleomod.so", ignoreCase = true) ||
+                    cleanFileName.equals("libSAUtils.so", ignoreCase = true) ||
+                    (cleanFileName.equals("libCLEOMod.so", ignoreCase = true) && entry.size in 1..699_999)
+                ) {
+                    zis.closeEntry()
+                    entry = zis.nextEntry
+                    continue
+                }
                 val isSharedObject = cleanFileName.endsWith(".so", ignoreCase = true)
                 val isSampConfig = name.contains("SAMP/", ignoreCase = true)
                 val isScriptOrConfig = cleanFileName.endsWith(".csa", ignoreCase = true) ||
@@ -218,6 +226,12 @@ class CleoPackageManager(private val context: Context) {
                 val targetParent = targetDestination.parentFile ?: targetFilesDir
                 if (destCanonical.startsWith(targetParent.canonicalPath)) {
                     targetDestination.parentFile?.mkdirs()
+                    if (cleanFileName.equals("libCLEOMod.so", ignoreCase = true) && targetDestination.exists() && targetDestination.length() > 500_000) {
+                        zis.closeEntry()
+                        entry = zis.nextEntry
+                        continue
+                    }
+                    if (targetDestination.exists()) targetDestination.delete()
                     FileOutputStream(targetDestination).use { fos ->
                         var len: Int
                         while (zis.read(buffer).also { len = it } > 0) {
@@ -251,22 +265,46 @@ class CleoPackageManager(private val context: Context) {
             // Intentar copiar archivos sueltos de assets/cleo
         }
 
+        // Copiar libCoopAndreasBridge.so compilado por NDK desde nativeLibraryDir hacia mods/
+        try {
+            val nativeDir = context.applicationInfo?.nativeLibraryDir
+            if (!nativeDir.isNullOrBlank()) {
+                val nativeSo = File(nativeDir, "libCoopAndreasBridge.so")
+                if (nativeSo.exists() && nativeSo.length() > 100) {
+                    val dstSo = File(modsDir, "libCoopAndreasBridge.so")
+                    if (dstSo.exists()) dstSo.delete()
+                    nativeSo.inputStream().use { input ->
+                        FileOutputStream(dstSo).use { out -> input.copyTo(out) }
+                    }
+                    if (!copiedMods.contains("libCoopAndreasBridge.so")) copiedMods.add("libCoopAndreasBridge.so")
+                }
+            }
+        } catch (_: Exception) {}
+
         // Asegurar que las librerías .so principales (incluyendo libCoopAndreasBridge.so) estén en mods/
-        listOf("libCLEOMod.so", "libSAUtils.so", "libCoopAndreasBridge.so").forEach { soName ->
+        listOf("cleomod.so", "net.rusjj.cleomod.so", "libSAUtils.so").forEach { dup ->
+            try { File(modsDir, dup).let { if (it.exists()) it.delete() } } catch (_: Exception) {}
+        }
+        File(modsDir, "libCLEOMod.so").let { if (it.exists() && it.length() < 700_000L) try { it.delete() } catch (_: Exception) {} }
+        listOf("libCoopAndreasBridge.so").forEach { soName ->
             try {
-                val assetStream = context.assets.open("cleo/$soName")
                 val targetFile = File(modsDir, soName)
+                if (soName == "libCLEOMod.so" && targetFile.exists() && targetFile.length() > 500_000) {
+                    if (!copiedMods.contains(soName)) copiedMods.add(soName)
+                    return@forEach
+                }
+                if (soName == "libCoopAndreasBridge.so" && targetFile.exists() && targetFile.length() > 10_000) {
+                    if (!copiedMods.contains(soName)) copiedMods.add(soName)
+                    return@forEach
+                }
+                val assetStream = context.assets.open("cleo/$soName")
+                if (targetFile.exists()) targetFile.delete()
                 FileOutputStream(targetFile).use { fos ->
                     assetStream.copyTo(fos)
                 }
                 if (!copiedMods.contains(soName)) copiedMods.add(soName)
 
-                if (soName == "libCLEOMod.so") {
-                    targetFile.copyTo(File(modsDir, "cleomod.so"), overwrite = true)
-                    targetFile.copyTo(File(modsDir, "net.rusjj.cleomod.so"), overwrite = true)
-                    if (!copiedMods.contains("cleomod.so")) copiedMods.add("cleomod.so")
-                    if (!copiedMods.contains("net.rusjj.cleomod.so")) copiedMods.add("net.rusjj.cleomod.so")
-                }
+                // No duplicar cleomod.so ni net.rusjj.cleomod.so en mods/
             } catch (e: Exception) {
                 // Si libCoopAndreasBridge.so no estaba en assets en un entorno de test, generar binario ELF puente válido
                 if (soName == "libCoopAndreasBridge.so") {
