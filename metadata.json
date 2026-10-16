@@ -1,6 +1,4 @@
 {
   "name": "CoopAndreas",
-  "description": "CoopAndreas companion for real-time multiplayer GTA San Andreas story campaigns, installation integrity protection, and synchronized voice chat.",
-  "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+  "description": "CoopAndreas companion for real-time multiplayer GTA San Andreas story campaigns, installation integrity protection, and synchronized voice chat."
 }
