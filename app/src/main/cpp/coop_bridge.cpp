@@ -267,6 +267,12 @@ struct GtaSaNativeSymbols {
     FnCRadarSetEntityBlip cradarSetEntityBlipFn = nullptr;
     FnCRadarClearBlipForEntity cradarClearBlipForEntityFn = nullptr;
     FnC3dMarkersPlaceMarkerCone c3dMarkersPlaceMarkerConeFn = nullptr;
+    using FnCTaskOperatorNew = void* (*)(size_t size);
+    using FnCTaskSimpleStandStillCtor = void* (*)(void* self, int nTime, bool bLooped, bool bUseAnimIdle, float fBlendData);
+    using FnCTaskManagerSetTask = void (*)(void* self, void* pTask, int nTaskIndex, bool bForceNewTask);
+    FnCTaskOperatorNew ctaskOperatorNewFn = nullptr;
+    FnCTaskSimpleStandStillCtor ctaskSimpleStandStillCtorFn = nullptr;
+    FnCTaskManagerSetTask ctaskManagerSetTaskFn = nullptr;
     uint8_t* bPlayersCanBeInSeparateCars = nullptr; // _ZN10CGameLogic27bPlayersCanBeInSeparateCarsE
 
     bool allCoreResolved = false;
@@ -331,6 +337,9 @@ struct GtaSaNativeSymbols {
         cradarSetEntityBlipFn = reinterpret_cast<FnCRadarSetEntityBlip>(dlsym(libHandle, "_ZN6CRadar13SetEntityBlipE9eBlipTypeij12eBlipDisplayPc"));
         cradarClearBlipForEntityFn = reinterpret_cast<FnCRadarClearBlipForEntity>(dlsym(libHandle, "_ZN6CRadar18ClearBlipForEntityE9eBlipTypei"));
         c3dMarkersPlaceMarkerConeFn = reinterpret_cast<FnC3dMarkersPlaceMarkerCone>(dlsym(libHandle, "_ZN10C3dMarkers15PlaceMarkerConeEyR7CVectorfhhhhtfsh"));
+        ctaskOperatorNewFn = reinterpret_cast<FnCTaskOperatorNew>(dlsym(libHandle, "_ZN5CTasknwEm"));
+        ctaskSimpleStandStillCtorFn = reinterpret_cast<FnCTaskSimpleStandStillCtor>(dlsym(libHandle, "_ZN21CTaskSimpleStandStillC1Eibbf"));
+        ctaskManagerSetTaskFn = reinterpret_cast<FnCTaskManagerSetTask>(dlsym(libHandle, "_ZN12CTaskManager7SetTaskEP5CTaskib"));
         bPlayersCanBeInSeparateCars = reinterpret_cast<uint8_t*>(dlsym(libHandle, "_ZN10CGameLogic27bPlayersCanBeInSeparateCarsE"));
 
         if (cworldProcessFn) {
@@ -566,20 +575,43 @@ public:
             *gtaSymbols_.bPlayersCanBeInSeparateCars = 1;
         }
 
-        // Leer coordenadas 3D reales, rotación, velocidad y salud de CJ
-        CVector myPos = gtaSymbols_.findPlayerCoorsFn(-1);
-        float myHeading = gtaSymbols_.findPlayerHeadingFn ? gtaSymbols_.findPlayerHeadingFn(-1) : 0.0f;
-        CVector mySpeed = gtaSymbols_.findPlayerSpeedFn ? gtaSymbols_.findPlayerSpeedFn(-1) : CVector{0.0f, 0.0f, 0.0f};
-        void* myVeh = gtaSymbols_.findPlayerVehicleFn ? gtaSymbols_.findPlayerVehicleFn(-1, false) : nullptr;
+        // Leer coordenadas 3D reales, rotación, velocidad y salud directamente del CPlayerPed/CVehicle de 64 bits
+        // (Evita el bug de Rockstar en FindPlayerHeading(-1) que indexa CWorld::Players[-1] y causa SIGSEGV)
+        uintptr_t localPedAddr = reinterpret_cast<uintptr_t>(localPed);
+        uint8_t pedFlags = *reinterpret_cast<uint8_t*>(localPedAddr + 0x585);
+        void* myVeh = ((pedFlags & 1) != 0)
+            ? *reinterpret_cast<void**>(localPedAddr + 0x708)
+            : nullptr;
+        uintptr_t activeEntityAddr = reinterpret_cast<uintptr_t>(myVeh ? myVeh : localPed);
+
+        uintptr_t localMat = *reinterpret_cast<uintptr_t*>(activeEntityAddr + 0x18);
+        uintptr_t posPtr = (localMat != 0) ? (localMat + 0x30) : (activeEntityAddr + 0x08);
+        CVector myPos{
+            *reinterpret_cast<float*>(posPtr + 0x00),
+            *reinterpret_cast<float*>(posPtr + 0x04),
+            *reinterpret_cast<float*>(posPtr + 0x08)
+        };
+
+        float myHeading = 0.0f;
+        if (localMat != 0) {
+            float upX = *reinterpret_cast<float*>(localMat + 0x10);
+            float upY = *reinterpret_cast<float*>(localMat + 0x14);
+            myHeading = std::atan2(-upX, upY);
+        } else {
+            myHeading = *reinterpret_cast<float*>(activeEntityAddr + 0x14);
+        }
+
+        CVector mySpeed{
+            *reinterpret_cast<float*>(activeEntityAddr + 0x68),
+            *reinterpret_cast<float*>(activeEntityAddr + 0x6c),
+            *reinterpret_cast<float*>(activeEntityAddr + 0x70)
+        };
+
         bool onMission = gtaSymbols_.isPlayerOnAMissionFn ? gtaSymbols_.isPlayerOnAMissionFn() : false;
 
-        float rawHealth = *reinterpret_cast<float*>(reinterpret_cast<uintptr_t>(localPed) + 0x908);
-        float rawArmor = *reinterpret_cast<float*>(reinterpret_cast<uintptr_t>(localPed) + 0x910);
-        uint16_t localModelId = *reinterpret_cast<uint16_t*>(reinterpret_cast<uintptr_t>(localPed) + 0x32);
-        int vehModelId = 0;
-        if (myVeh) {
-            vehModelId = static_cast<int>(*reinterpret_cast<uint16_t*>(reinterpret_cast<uintptr_t>(myVeh) + 0x32));
-        }
+        // En libGTASA.so arm64 v2.10: m_fHealth = +0x6ac, m_fMaxHealth = +0x6b0, m_fArmour = +0x6b4
+        float rawHealth = *reinterpret_cast<float*>(localPedAddr + 0x6ac);
+        float rawArmor = *reinterpret_cast<float*>(localPedAddr + 0x6b4);
 
         uint64_t nowMs = currentTimeMillis();
 
@@ -594,25 +626,20 @@ public:
             me.x = myPos.x;
             me.y = myPos.y;
             me.z = myPos.z;
-            me.vx = mySpeed.x;
-            me.vy = mySpeed.y;
-            me.vz = mySpeed.z;
-            me.heading = myHeading;
+            me.vx = std::isfinite(mySpeed.x) ? mySpeed.x : 0.0f;
+            me.vy = std::isfinite(mySpeed.y) ? mySpeed.y : 0.0f;
+            me.vz = std::isfinite(mySpeed.z) ? mySpeed.z : 0.0f;
+            me.heading = std::isfinite(myHeading) ? myHeading : 0.0f;
         }
-        me.health = std::clamp(static_cast<int>(rawHealth), 0, 200);
-        me.armor = std::clamp(static_cast<int>(rawArmor), 0, 200);
-        if (localModelId > 0 && localModelId < 300) {
-            me.skinModelId = localModelId;
-        }
+        me.health = std::isfinite(rawHealth) ? std::clamp(static_cast<int>(rawHealth), 0, 200) : 100;
+        me.armor = std::isfinite(rawArmor) ? std::clamp(static_cast<int>(rawArmor), 0, 200) : 0;
         me.vehicleNetId = myVeh ? 101 : 0;
-        me.vehicleModelId = (vehModelId >= 400) ? vehModelId : 492;
+        me.vehicleModelId = 492;
         me.seatIndex = myVeh ? 0 : -1;
         me.cameraMode = 0; // Cámara 3D Independiente
 
         if (config_.isHost) {
             mission_.onMissionFlag = onMission ? 1 : 0;
-        } else if (gtaSymbols_.onAMissionFlagOffset && gtaSymbols_.scriptSpace) {
-            // Sincronizar flag $ONMISSION del Host al Guest si el Host inició misión
         }
 
         // Procesar e instanciar jugadores remotos en el mundo 3D de GTA San Andreas
@@ -622,7 +649,7 @@ public:
             bool peerRecentlyActive = (rem.lastNetworkUpdateMs > 0 && (nowMs - rem.lastNetworkUpdateMs) < 20000);
             if (!peerRecentlyActive || !rem.hasRealGtaCoords) continue;
 
-            // Si somos Guest (o al conectar por primera vez) y estamos lejos del compañero (> 50m),
+            // Si somos Guest (o al conectar por primera vez) y estamos lejos del compañero (> 45m),
             // teletransportar automáticamente a CJ junto al compañero para que se vean cara a cara de inmediato
             if (!initialSyncTeleportDone_ && gtaSymbols_.cpedTeleportFn) {
                 float dx = rem.x - me.x;
@@ -630,7 +657,7 @@ public:
                 float dz = rem.z - me.z;
                 float distSq = dx * dx + dy * dy + dz * dz;
                 if (!config_.isHost && distSq > (45.0f * 45.0f) && std::fabs(rem.x) > 1.0f) {
-                    CVector meetPos{rem.x + 2.2f, rem.y + 1.5f, rem.z + 0.35f};
+                    CVector meetPos{rem.x + 2.0f, rem.y + 1.5f, rem.z + 0.25f};
                     gtaSymbols_.cpedTeleportFn(localPed, meetPos, 0);
                     me.x = meetPos.x;
                     me.y = meetPos.y;
@@ -653,43 +680,50 @@ public:
                 }
             }
 
-            int desiredModel = rem.skinModelId;
-            if (desiredModel <= 0 || desiredModel > 300) {
-                desiredModel = (i == 1) ? 270 : 7; // 270 = Sweet, 7 = Male01
-            }
-
-            // Solicitar carga del modelo en CStreaming si aún no está cargado
-            if (!gtaSymbols_.isModelLoaded(desiredModel) && gtaSymbols_.cstreamingRequestModelFn) {
-                gtaSymbols_.cstreamingRequestModelFn(desiredModel, 2);
-                if (gtaSymbols_.cstreamingLoadAllRequestedModelsFn) {
-                    gtaSymbols_.cstreamingLoadAllRequestedModelsFn(false);
-                }
-            }
-
-            // Si el CPed remoto aún no fue creado en el mundo 3D, instanciarlo ahora
-            if (!ped && gtaSymbols_.cpedOperatorNewFn && gtaSymbols_.ccivilianPedCtorFn && gtaSymbols_.cpedTeleportFn) {
-                int spawnModel = gtaSymbols_.isModelLoaded(desiredModel) ? desiredModel : 0; // 0 (CJ) siempre está cargado
+            // Si el CPed remoto aún no fue creado en el mundo 3D, instanciarlo siguiendo la secuencia exacta de CREATE_CHAR (009A)
+            if (!ped && gtaSymbols_.cpedOperatorNewFn && gtaSymbols_.ccivilianPedCtorFn && gtaSymbols_.cworldAddFn) {
+                // Modelo 0 (CJ) siempre está cargado en memoria en GTA SA; evita cualquier bloqueo de CStreaming
+                uint32_t spawnModel = 0;
                 void* newPed = gtaSymbols_.cpedOperatorNewFn(0x9c8);
                 if (newPed) {
-                    gtaSymbols_.ccivilianPedCtorFn(newPed, 4 /*PED_TYPE_CIVMALE*/, static_cast<uint32_t>(spawnModel));
+                    gtaSymbols_.ccivilianPedCtorFn(newPed, 4 /*PED_TYPE_CIVMALE*/, spawnModel);
+                    uintptr_t newPedAddr = reinterpret_cast<uintptr_t>(newPed);
+
+                    // Inicializar CTaskSimpleStandStill en m_pIntelligence->m_TaskMgr (slot 4 = TASK_PRIMARY_DEFAULT)
+                    // tal como lo hace CREATE_CHAR (0x3f611c..0x3f6154) para que CPedIntelligence::Process no crashee
+                    uintptr_t pedIntel = *reinterpret_cast<uintptr_t*>(newPedAddr + 0x538);
+                    if (pedIntel != 0 && gtaSymbols_.ctaskOperatorNewFn &&
+                        gtaSymbols_.ctaskSimpleStandStillCtorFn && gtaSymbols_.ctaskManagerSetTaskFn) {
+                        void* task = gtaSymbols_.ctaskOperatorNewFn(0x28);
+                        if (task) {
+                            gtaSymbols_.ctaskSimpleStandStillCtorFn(task, 999999, true, false, 8.0f);
+                            gtaSymbols_.ctaskManagerSetTaskFn(reinterpret_cast<void*>(pedIntel + 8), task, 4, false);
+                        }
+                    }
+
                     if (gtaSymbols_.cpedSetCharCreatedByFn) {
                         gtaSymbols_.cpedSetCharCreatedByFn(newPed, 2 /*MISSION_CHAR*/);
                     }
-                    *reinterpret_cast<float*>(reinterpret_cast<uintptr_t>(newPed) + 0x908) = 200.0f;
-                    *reinterpret_cast<float*>(reinterpret_cast<uintptr_t>(newPed) + 0x90c) = 200.0f;
+                    *reinterpret_cast<float*>(newPedAddr + 0x6ac) = 200.0f; // m_fHealth
+                    *reinterpret_cast<float*>(newPedAddr + 0x6b0) = 200.0f; // m_fMaxHealth
 
-                    CVector spawnPos{rem.x, rem.y, rem.z};
-                    gtaSymbols_.cpedTeleportFn(newPed, spawnPos, 0);
-
-                    if (gtaSymbols_.cpedGiveWeaponFn && gtaSymbols_.cpedSetCurrentWeaponFn && rem.weaponId > 0) {
-                        gtaSymbols_.cpedGiveWeaponFn(newPed, rem.weaponId, 9999, true);
-                        gtaSymbols_.cpedSetCurrentWeaponFn(newPed, rem.weaponId);
+                    uintptr_t newMat = *reinterpret_cast<uintptr_t*>(newPedAddr + 0x18);
+                    if (newMat != 0) {
+                        *reinterpret_cast<float*>(newMat + 0x30) = rem.x;
+                        *reinterpret_cast<float*>(newMat + 0x34) = rem.y;
+                        *reinterpret_cast<float*>(newMat + 0x38) = rem.z;
                     }
+                    *reinterpret_cast<float*>(newPedAddr + 0x08) = rem.x;
+                    *reinterpret_cast<float*>(newPedAddr + 0x0c) = rem.y;
+                    *reinterpret_cast<float*>(newPedAddr + 0x10) = rem.z;
+
+                    // Agregar al mundo 3D igual que CREATE_CHAR (0x3f6238: bl CWorld::Add)
+                    gtaSymbols_.cworldAddFn(newPed);
 
                     int handle = gtaSymbols_.cpoolsGetPedRefFn ? gtaSymbols_.cpoolsGetPedRefFn(newPed) : -1;
                     remotePedPtr_[i] = newPed;
                     remotePedHandle_[i] = handle;
-                    remotePedSpawnedModel_[i] = spawnModel;
+                    remotePedSpawnedModel_[i] = static_cast<int>(spawnModel);
 
                     if (handle > 0 && gtaSymbols_.cradarSetEntityBlipFn) {
                         remoteBlipHandle_[i] = gtaSymbols_.cradarSetEntityBlipFn(
@@ -698,30 +732,22 @@ public:
                     }
 
                     ped = newPed;
-                    LOGI("Spawned 3D Remote Player P%d (ped=%p, handle=%d, model=%d) at (%.2f, %.2f, %.2f)",
-                         i + 1, newPed, handle, spawnModel, spawnPos.x, spawnPos.y, spawnPos.z);
+                    LOGI("Spawned 3D Remote Player P%d (ped=%p, handle=%d, model=%u) at (%.2f, %.2f, %.2f)",
+                         i + 1, newPed, handle, spawnModel, rem.x, rem.y, rem.z);
                 }
             }
 
-            if (ped) {
-                // Actualizar skin si terminó de cargar en CStreaming
-                if (remotePedSpawnedModel_[i] != desiredModel &&
-                    gtaSymbols_.isModelLoaded(desiredModel) &&
-                    gtaSymbols_.cpedSetModelIndexFn) {
-                    gtaSymbols_.cpedSetModelIndexFn(ped, static_cast<uint32_t>(desiredModel));
-                    remotePedSpawnedModel_[i] = desiredModel;
-                }
+            if (ped && gtaSymbols_.cpedTeleportFn) {
+                uintptr_t pedAddr = reinterpret_cast<uintptr_t>(ped);
+                // Mantener vivo al actor remoto (+0x6ac = m_fHealth en arm64)
+                *reinterpret_cast<float*>(pedAddr + 0x6ac) = 200.0f;
 
-                // Mantener vivo al actor remoto
-                *reinterpret_cast<float*>(reinterpret_cast<uintptr_t>(ped) + 0x908) = 200.0f;
-
-                // Leer posición actual de la matriz del actor remoto
-                void* mat = *reinterpret_cast<void**>(reinterpret_cast<uintptr_t>(ped) + 0x18);
+                uintptr_t mat = *reinterpret_cast<uintptr_t*>(pedAddr + 0x18);
                 float curX = rem.x, curY = rem.y, curZ = rem.z;
-                if (mat) {
-                    curX = *reinterpret_cast<float*>(reinterpret_cast<uintptr_t>(mat) + 0x30);
-                    curY = *reinterpret_cast<float*>(reinterpret_cast<uintptr_t>(mat) + 0x34);
-                    curZ = *reinterpret_cast<float*>(reinterpret_cast<uintptr_t>(mat) + 0x38);
+                if (mat != 0) {
+                    curX = *reinterpret_cast<float*>(mat + 0x30);
+                    curY = *reinterpret_cast<float*>(mat + 0x34);
+                    curZ = *reinterpret_cast<float*>(mat + 0x38);
                 }
 
                 float dx = rem.x - curX;
@@ -729,50 +755,30 @@ public:
                 float dz = rem.z - curZ;
                 float distSq = dx * dx + dy * dy + dz * dz;
 
-                if (distSq > 16.0f && gtaSymbols_.cpedTeleportFn) {
-                    gtaSymbols_.cpedTeleportFn(ped, CVector{rem.x, rem.y, rem.z}, 0);
-                } else if (mat) {
-                    float nextX = curX + dx * 0.55f;
-                    float nextY = curY + dy * 0.55f;
-                    float nextZ = curZ + dz * 0.55f;
+                float nextX = (distSq > 16.0f) ? rem.x : (curX + dx * 0.55f);
+                float nextY = (distSq > 16.0f) ? rem.y : (curY + dy * 0.55f);
+                float nextZ = (distSq > 16.0f) ? rem.z : (curZ + dz * 0.55f);
 
-                    if (gtaSymbols_.cworldRemoveFn) gtaSymbols_.cworldRemoveFn(ped);
-
-                    *reinterpret_cast<float*>(reinterpret_cast<uintptr_t>(mat) + 0x30) = nextX;
-                    *reinterpret_cast<float*>(reinterpret_cast<uintptr_t>(mat) + 0x34) = nextY;
-                    *reinterpret_cast<float*>(reinterpret_cast<uintptr_t>(mat) + 0x38) = nextZ;
-                    *reinterpret_cast<float*>(reinterpret_cast<uintptr_t>(ped) + 0x08) = nextX;
-                    *reinterpret_cast<float*>(reinterpret_cast<uintptr_t>(ped) + 0x0c) = nextY;
-                    *reinterpret_cast<float*>(reinterpret_cast<uintptr_t>(ped) + 0x10) = nextZ;
-
-                    // Velocidad física para suavizar movimiento
-                    *reinterpret_cast<float*>(reinterpret_cast<uintptr_t>(ped) + 0x78) = rem.vx;
-                    *reinterpret_cast<float*>(reinterpret_cast<uintptr_t>(ped) + 0x7c) = rem.vy;
-                    *reinterpret_cast<float*>(reinterpret_cast<uintptr_t>(ped) + 0x80) = rem.vz;
-
-                    // Rotación Z (heading en radianes)
-                    *reinterpret_cast<float*>(reinterpret_cast<uintptr_t>(ped) + 0x6ac) = rem.heading;
-                    *reinterpret_cast<float*>(reinterpret_cast<uintptr_t>(ped) + 0x6b0) = rem.heading;
-                    if (gtaSymbols_.cmatrixSetRotateZOnlyFn) {
-                        gtaSymbols_.cmatrixSetRotateZOnlyFn(mat, rem.heading);
-                    }
-                    if (gtaSymbols_.centityUpdateRwFrameFn) {
-                        gtaSymbols_.centityUpdateRwFrameFn(ped);
-                    }
-                    if (gtaSymbols_.cworldAddFn) gtaSymbols_.cworldAddFn(ped);
+                // Usar CPed::Teleport nativo de Rockstar (CWorld::Remove + matriz + RwObject + CWorld::Add)
+                if (distSq > 0.0004f) {
+                    gtaSymbols_.cpedTeleportFn(ped, CVector{nextX, nextY, nextZ}, 0);
                 }
 
-                // Dibujar marcador 3D (cono verde brillante) sobre la cabeza del jugador remoto
-                if (gtaSymbols_.c3dMarkersPlaceMarkerConeFn) {
-                    CVector conePos{rem.x, rem.y, rem.z + 1.35f};
-                    gtaSymbols_.c3dMarkersPlaceMarkerConeFn(
-                        0xC0090000ULL + static_cast<uint64_t>(i),
-                        conePos,
-                        0.55f,
-                        40, 255, 90, 225,
-                        1024, 0.2f, 5, 0
-                    );
+                // Actualizar orientación Z en CMatrix y velocidad física en +0x68..0x70
+                mat = *reinterpret_cast<uintptr_t*>(pedAddr + 0x18);
+                if (mat != 0 && std::isfinite(rem.heading)) {
+                    float c = std::cos(rem.heading);
+                    float s = std::sin(rem.heading);
+                    *reinterpret_cast<float*>(mat + 0x00) = c;
+                    *reinterpret_cast<float*>(mat + 0x04) = s;
+                    *reinterpret_cast<float*>(mat + 0x08) = 0.0f;
+                    *reinterpret_cast<float*>(mat + 0x10) = -s;
+                    *reinterpret_cast<float*>(mat + 0x14) = c;
+                    *reinterpret_cast<float*>(mat + 0x18) = 0.0f;
                 }
+                *reinterpret_cast<float*>(pedAddr + 0x68) = rem.vx;
+                *reinterpret_cast<float*>(pedAddr + 0x6c) = rem.vy;
+                *reinterpret_cast<float*>(pedAddr + 0x70) = rem.vz;
             }
         }
 #endif
