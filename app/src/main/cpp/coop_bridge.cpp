@@ -70,8 +70,11 @@ enum PacketType : uint8_t {
     PKT_PED_SYNC     = 0x02,
     PKT_VEHICLE_SYNC = 0x03,
     PKT_MISSION_SYNC = 0x04,
-    PKT_WEAPON_FIRE  = 0x05
+    PKT_WEAPON_FIRE  = 0x05,
+    PKT_WORLD_SYNC   = 0x06
 };
+
+constexpr int kMaxSyncedWorldPeds = 6;
 
 // Opcodes Personalizados estilo sa_sbl_coopandreas (0D00 - 0D04)
 enum CustomCoopOpcode : uint16_t {
@@ -168,6 +171,32 @@ struct WeaponFirePacket {
     int32_t hitEntityNetId = -1;
     uint8_t hitEntityType = 0;    // 0 = mundo, 1 = ped, 2 = vehículo
     uint8_t damageAmount = 15;
+};
+
+struct SyncedWorldPedEntry {
+    uint8_t active = 0;
+    int16_t hostPoolSlot = -1;
+    int16_t modelId = 0;
+    float x = 0.0f;
+    float y = 0.0f;
+    float z = 0.0f;
+    float vx = 0.0f;
+    float vy = 0.0f;
+    float vz = 0.0f;
+    float heading = 0.0f;
+    uint8_t moveState = 1; // 1=PEDMOVE_STILL, 4=PEDMOVE_WALK, 6=PEDMOVE_RUN, 7=PEDMOVE_SPRINT
+    uint8_t health = 100;
+};
+
+struct WorldSyncPacket {
+    BinaryPacketHeader header;
+    uint8_t clockHours = 12;
+    uint8_t clockMinutes = 0;
+    uint16_t clockSeconds = 0;
+    int16_t oldWeather = 0;
+    int16_t newWeather = 0;
+    uint8_t numPeds = 0;
+    SyncedWorldPedEntry peds[kMaxSyncedWorldPeds];
 };
 
 // Archivo binario de memoria compartida (coop_telemetry.bin) entre libCoopAndreasBridge.so,
@@ -270,10 +299,25 @@ struct GtaSaNativeSymbols {
     using FnCTaskOperatorNew = void* (*)(size_t size);
     using FnCTaskSimpleStandStillCtor = void* (*)(void* self, int nTime, bool bLooped, bool bUseAnimIdle, float fBlendData);
     using FnCTaskManagerSetTask = void (*)(void* self, void* pTask, int nTaskIndex, bool bForceNewTask);
+    using FnCPedSetMoveState = void (*)(void* thisPed, int moveState);
+    using FnCPedSetMoveAnim = void (*)(void* thisPed);
+    using FnCPopulationRemoveAllRandomPeds = void (*)();
+
     FnCTaskOperatorNew ctaskOperatorNewFn = nullptr;
     FnCTaskSimpleStandStillCtor ctaskSimpleStandStillCtorFn = nullptr;
     FnCTaskManagerSetTask ctaskManagerSetTaskFn = nullptr;
+    FnCPedSetMoveState cpedSetMoveStateFn = nullptr;
+    FnCPedSetMoveAnim cpedSetMoveAnimFn = nullptr;
+    FnCPopulationRemoveAllRandomPeds cpopulationRemoveAllRandomPedsFn = nullptr;
+
     uint8_t* bPlayersCanBeInSeparateCars = nullptr; // _ZN10CGameLogic27bPlayersCanBeInSeparateCarsE
+    uint8_t* clockHours = nullptr;                  // _ZN6CClock18ms_nGameClockHoursE
+    uint8_t* clockMinutes = nullptr;                // _ZN6CClock20ms_nGameClockMinutesE
+    uint16_t* clockSeconds = nullptr;               // _ZN6CClock20ms_nGameClockSecondsE
+    int16_t* oldWeatherType = nullptr;              // _ZN8CWeather14OldWeatherTypeE
+    int16_t* newWeatherType = nullptr;              // _ZN8CWeather14NewWeatherTypeE
+    uint8_t* dontCreateRandomCops = nullptr;        // _ZN11CPopulation23m_bDontCreateRandomCopsE
+    uint8_t* dontCreateRandomGangMembers = nullptr; // _ZN11CPopulation30m_bDontCreateRandomGangMembersE
 
     bool allCoreResolved = false;
 
@@ -340,7 +384,18 @@ struct GtaSaNativeSymbols {
         ctaskOperatorNewFn = reinterpret_cast<FnCTaskOperatorNew>(dlsym(libHandle, "_ZN5CTasknwEm"));
         ctaskSimpleStandStillCtorFn = reinterpret_cast<FnCTaskSimpleStandStillCtor>(dlsym(libHandle, "_ZN21CTaskSimpleStandStillC1Eibbf"));
         ctaskManagerSetTaskFn = reinterpret_cast<FnCTaskManagerSetTask>(dlsym(libHandle, "_ZN12CTaskManager7SetTaskEP5CTaskib"));
+        cpedSetMoveStateFn = reinterpret_cast<FnCPedSetMoveState>(dlsym(libHandle, "_ZN4CPed12SetMoveStateE10eMoveState"));
+        cpedSetMoveAnimFn = reinterpret_cast<FnCPedSetMoveAnim>(dlsym(libHandle, "_ZN4CPed11SetMoveAnimEv"));
+        cpopulationRemoveAllRandomPedsFn = reinterpret_cast<FnCPopulationRemoveAllRandomPeds>(dlsym(libHandle, "_ZN11CPopulation19RemoveAllRandomPedsEv"));
+
         bPlayersCanBeInSeparateCars = reinterpret_cast<uint8_t*>(dlsym(libHandle, "_ZN10CGameLogic27bPlayersCanBeInSeparateCarsE"));
+        clockHours = reinterpret_cast<uint8_t*>(dlsym(libHandle, "_ZN6CClock18ms_nGameClockHoursE"));
+        clockMinutes = reinterpret_cast<uint8_t*>(dlsym(libHandle, "_ZN6CClock20ms_nGameClockMinutesE"));
+        clockSeconds = reinterpret_cast<uint16_t*>(dlsym(libHandle, "_ZN6CClock20ms_nGameClockSecondsE"));
+        oldWeatherType = reinterpret_cast<int16_t*>(dlsym(libHandle, "_ZN8CWeather14OldWeatherTypeE"));
+        newWeatherType = reinterpret_cast<int16_t*>(dlsym(libHandle, "_ZN8CWeather14NewWeatherTypeE"));
+        dontCreateRandomCops = reinterpret_cast<uint8_t*>(dlsym(libHandle, "_ZN11CPopulation23m_bDontCreateRandomCopsE"));
+        dontCreateRandomGangMembers = reinterpret_cast<uint8_t*>(dlsym(libHandle, "_ZN11CPopulation30m_bDontCreateRandomGangMembersE"));
 
         if (cworldProcessFn) {
             Dl_info info{};
@@ -350,11 +405,10 @@ struct GtaSaNativeSymbols {
         }
 
         allCoreResolved = (cworldPlayers != nullptr && scriptSpace != nullptr && processOneCommandFn != nullptr);
-        LOGI("libGTASA.so resolved (base=0x%lx): CWorld::Players=%p, PedPool=%p, VehPool=%p, ScriptSpace=%p, OnAMissionFlag=%p, ProcessOneCommand=%p, FindPlayerPed=%p, FindPlayerCoors=%p, CWorld::Process=%p, CCivilianPed=%p",
+        LOGI("libGTASA.so resolved (base=0x%lx): CWorld::Players=%p, PedPool=%p, VehPool=%p, CClock=%p:%p, CWeather=%p, SetMoveAnim=%p, RemoveRandomPeds=%p",
              static_cast<unsigned long>(libBase), cworldPlayers, cpoolsPedPool, cpoolsVehiclePool,
-             scriptSpace, onAMissionFlagOffset, processOneCommandFn,
-             reinterpret_cast<void*>(findPlayerPedFn), reinterpret_cast<void*>(findPlayerCoorsFn),
-             reinterpret_cast<void*>(cworldProcessFn), reinterpret_cast<void*>(ccivilianPedCtorFn));
+             clockHours, clockMinutes, oldWeatherType,
+             reinterpret_cast<void*>(cpedSetMoveAnimFn), reinterpret_cast<void*>(cpopulationRemoveAllRandomPedsFn));
         return allCoreResolved;
 #else
         return false;
@@ -415,6 +469,17 @@ struct MissionSyncState {
     float checkpointZ = 13.5f;
     float checkpointRadius = 4.5f;
     bool freeRoamAnySave = true;
+};
+
+struct WorldSyncState {
+    uint64_t lastNetworkUpdateMs = 0;
+    uint8_t clockHours = 12;
+    uint8_t clockMinutes = 0;
+    uint16_t clockSeconds = 0;
+    int16_t oldWeather = 0;
+    int16_t newWeather = 0;
+    uint8_t numPeds = 0;
+    SyncedWorldPedEntry peds[kMaxSyncedWorldPeds];
 };
 
 struct BridgeConfig {
@@ -541,11 +606,102 @@ public:
     }
 
     // ========================================================================
+    // HELPER: ACTUALIZAR POSICIÓN, ROTACIÓN Y ANIMACIÓN DE UN CPED SIN BORRAR VELOCIDAD
+    // ========================================================================
+    void applySmoothPedTransformAndAnim(
+        void* ped, float targetX, float targetY, float targetZ,
+        float vx, float vy, float vz, float heading, int moveState, float health
+    ) {
+#if defined(__unix__) || defined(__ANDROID__) || defined(__linux__)
+        if (!ped) return;
+        uintptr_t pedAddr = reinterpret_cast<uintptr_t>(ped);
+
+        // Mantener vivo al actor (+0x6ac = m_fHealth en arm64)
+        *reinterpret_cast<float*>(pedAddr + 0x6ac) = std::max(health, 100.0f);
+
+        uintptr_t mat = *reinterpret_cast<uintptr_t*>(pedAddr + 0x18);
+        float curX = targetX, curY = targetY, curZ = targetZ;
+        if (mat != 0) {
+            curX = *reinterpret_cast<float*>(mat + 0x30);
+            curY = *reinterpret_cast<float*>(mat + 0x34);
+            curZ = *reinterpret_cast<float*>(mat + 0x38);
+        }
+
+        float dx = targetX - curX;
+        float dy = targetY - curY;
+        float dz = targetZ - curZ;
+        float distSq = dx * dx + dy * dy + dz * dz;
+
+        // Inferir estado de movimiento (1=STILL, 4=WALK, 6=RUN, 7=SPRINT) si el paquete no lo especifica o si hay desplazamiento
+        float speed2d = std::sqrt(vx * vx + vy * vy);
+        int effectiveMoveState = moveState;
+        if (effectiveMoveState != 4 && effectiveMoveState != 6 && effectiveMoveState != 7) {
+            if (speed2d > 0.16f) effectiveMoveState = 7;      // PEDMOVE_SPRINT
+            else if (speed2d > 0.06f) effectiveMoveState = 6; // PEDMOVE_RUN
+            else if (speed2d > 0.01f || (distSq > 0.0009f && distSq < 25.0f)) effectiveMoveState = 4; // PEDMOVE_WALK
+            else effectiveMoveState = 1;                      // PEDMOVE_STILL
+        }
+
+        if (distSq > 25.0f && gtaSymbols_.cpedTeleportFn) {
+            // Salto grande (> 5m): usar CPed::Teleport nativo
+            gtaSymbols_.cpedTeleportFn(ped, CVector{targetX, targetY, targetZ}, 0);
+        } else if (mat != 0 && gtaSymbols_.cworldRemoveFn && gtaSymbols_.cworldAddFn) {
+            // Movimiento continuo suave sin resetear tareas ni poner a cero m_vecMoveSpeed
+            float nextX = curX + dx * 0.60f;
+            float nextY = curY + dy * 0.60f;
+            float nextZ = curZ + dz * 0.60f;
+
+            gtaSymbols_.cworldRemoveFn(ped);
+
+            *reinterpret_cast<float*>(mat + 0x30) = nextX;
+            *reinterpret_cast<float*>(mat + 0x34) = nextY;
+            *reinterpret_cast<float*>(mat + 0x38) = nextZ;
+            *reinterpret_cast<float*>(pedAddr + 0x08) = nextX;
+            *reinterpret_cast<float*>(pedAddr + 0x0c) = nextY;
+            *reinterpret_cast<float*>(pedAddr + 0x10) = nextZ;
+
+            if (std::isfinite(heading)) {
+                float c = std::cos(heading);
+                float s = std::sin(heading);
+                *reinterpret_cast<float*>(mat + 0x00) = c;
+                *reinterpret_cast<float*>(mat + 0x04) = s;
+                *reinterpret_cast<float*>(mat + 0x08) = 0.0f;
+                *reinterpret_cast<float*>(mat + 0x10) = -s;
+                *reinterpret_cast<float*>(mat + 0x14) = c;
+                *reinterpret_cast<float*>(mat + 0x18) = 0.0f;
+                // Actualizar m_fCurrentRotation (+0x6c4) y m_fAimingRotation (+0x6c8)
+                *reinterpret_cast<float*>(pedAddr + 0x6c4) = heading;
+                *reinterpret_cast<float*>(pedAddr + 0x6c8) = heading;
+            }
+
+            *reinterpret_cast<float*>(pedAddr + 0x68) = vx;
+            *reinterpret_cast<float*>(pedAddr + 0x6c) = vy;
+            *reinterpret_cast<float*>(pedAddr + 0x70) = vz;
+
+            if (gtaSymbols_.centityUpdateRwFrameFn) {
+                gtaSymbols_.centityUpdateRwFrameFn(ped);
+            }
+            gtaSymbols_.cworldAddFn(ped);
+        }
+
+        // Aplicar animación de caminar / correr / sprint / quieto en el RpClump
+        if (gtaSymbols_.cpedSetMoveStateFn) {
+            gtaSymbols_.cpedSetMoveStateFn(ped, effectiveMoveState);
+        } else {
+            *reinterpret_cast<int32_t*>(pedAddr + 0x550) = effectiveMoveState;
+        }
+        if (gtaSymbols_.cpedSetMoveAnimFn) {
+            gtaSymbols_.cpedSetMoveAnimFn(ped);
+        }
+#endif
+    }
+
+    // ========================================================================
     // EJECUTADO EN EL HILO PRINCIPAL DE GTA SA (CADA FRAME DE CWorld::Process)
     // ========================================================================
     void onMainGameThreadTick() {
 #if defined(__unix__) || defined(__ANDROID__) || defined(__linux__)
-        mainThreadTicks_.fetch_add(1);
+        int64_t tickCount = mainThreadTicks_.fetch_add(1) + 1;
         if (!gtaSymbols_.findPlayerPedFn || !gtaSymbols_.findPlayerCoorsFn) return;
 
         void* localPed = gtaSymbols_.findPlayerPedFn(-1);
@@ -555,6 +711,11 @@ public:
             for (int i = 0; i < kMaxCoopPlayers; ++i) {
                 remotePedPtr_[i] = nullptr;
                 remotePedHandle_[i] = -1;
+            }
+            for (int k = 0; k < kMaxSyncedWorldPeds; ++k) {
+                worldSyncPedPtr_[k] = nullptr;
+                worldSyncPedHandle_[k] = -1;
+                worldSyncPedHostSlot_[k] = -1;
             }
             return;
         }
@@ -567,6 +728,11 @@ public:
                 remotePedPtr_[i] = nullptr;
                 remotePedHandle_[i] = -1;
             }
+            for (int k = 0; k < kMaxSyncedWorldPeds; ++k) {
+                worldSyncPedPtr_[k] = nullptr;
+                worldSyncPedHandle_[k] = -1;
+                worldSyncPedHostSlot_[k] = -1;
+            }
             LOGI("Local Player CJ detected in world: CPlayerPed=%p", localPed);
         }
 
@@ -575,8 +741,7 @@ public:
             *gtaSymbols_.bPlayersCanBeInSeparateCars = 1;
         }
 
-        // Leer coordenadas 3D reales, rotación, velocidad y salud directamente del CPlayerPed/CVehicle de 64 bits
-        // (Evita el bug de Rockstar en FindPlayerHeading(-1) que indexa CWorld::Players[-1] y causa SIGSEGV)
+        // Leer coordenadas 3D reales, rotación, velocidad, estado de animación y salud directamente del CPlayerPed/CVehicle de 64 bits
         uintptr_t localPedAddr = reinterpret_cast<uintptr_t>(localPed);
         uint8_t pedFlags = *reinterpret_cast<uint8_t*>(localPedAddr + 0x585);
         void* myVeh = ((pedFlags & 1) != 0)
@@ -592,13 +757,11 @@ public:
             *reinterpret_cast<float*>(posPtr + 0x08)
         };
 
-        float myHeading = 0.0f;
-        if (localMat != 0) {
+        float myHeading = *reinterpret_cast<float*>(localPedAddr + 0x6c4); // m_fCurrentRotation
+        if (myVeh && localMat != 0) {
             float upX = *reinterpret_cast<float*>(localMat + 0x10);
             float upY = *reinterpret_cast<float*>(localMat + 0x14);
             myHeading = std::atan2(-upX, upY);
-        } else {
-            myHeading = *reinterpret_cast<float*>(activeEntityAddr + 0x14);
         }
 
         CVector mySpeed{
@@ -607,6 +770,7 @@ public:
             *reinterpret_cast<float*>(activeEntityAddr + 0x70)
         };
 
+        int32_t localMoveState = *reinterpret_cast<int32_t*>(localPedAddr + 0x550);
         bool onMission = gtaSymbols_.isPlayerOnAMissionFn ? gtaSymbols_.isPlayerOnAMissionFn() : false;
 
         // En libGTASA.so arm64 v2.10: m_fHealth = +0x6ac, m_fMaxHealth = +0x6b0, m_fArmour = +0x6b4
@@ -633,13 +797,193 @@ public:
         }
         me.health = std::isfinite(rawHealth) ? std::clamp(static_cast<int>(rawHealth), 0, 200) : 100;
         me.armor = std::isfinite(rawArmor) ? std::clamp(static_cast<int>(rawArmor), 0, 200) : 0;
+        me.animId = static_cast<uint16_t>(std::clamp(localMoveState, 0, 12));
         me.vehicleNetId = myVeh ? 101 : 0;
         me.vehicleModelId = 492;
         me.seatIndex = myVeh ? 0 : -1;
         me.cameraMode = 0; // Cámara 3D Independiente
 
+        // ====================================================================
+        // SINCRONIZACIÓN DE RELOJ (HORA), CLIMA Y PEATONES DEL MUNDO (HOST <-> GUEST)
+        // ====================================================================
         if (config_.isHost) {
             mission_.onMissionFlag = onMission ? 1 : 0;
+            if (gtaSymbols_.clockHours) worldState_.clockHours = *gtaSymbols_.clockHours;
+            if (gtaSymbols_.clockMinutes) worldState_.clockMinutes = *gtaSymbols_.clockMinutes;
+            if (gtaSymbols_.clockSeconds) worldState_.clockSeconds = *gtaSymbols_.clockSeconds;
+            if (gtaSymbols_.oldWeatherType) worldState_.oldWeather = *gtaSymbols_.oldWeatherType;
+            if (gtaSymbols_.newWeatherType) worldState_.newWeather = *gtaSymbols_.newWeatherType;
+
+            // Escanear CPools::ms_pPedPool cada 3 frames (~100ms) para replicar los 6 peatones más cercanos del Host al Guest
+            if ((tickCount % 3 == 0) && gtaSymbols_.cpoolsPedPool) {
+                void* poolPtr = *reinterpret_cast<void**>(gtaSymbols_.cpoolsPedPool);
+                if (poolPtr) {
+                    uintptr_t poolAddr = reinterpret_cast<uintptr_t>(poolPtr);
+                    uint8_t* objects = *reinterpret_cast<uint8_t**>(poolAddr + 0x00);
+                    uint8_t* byteMap = *reinterpret_cast<uint8_t**>(poolAddr + 0x08);
+                    int32_t poolSize = *reinterpret_cast<int32_t*>(poolAddr + 0x10);
+
+                    struct CandidatePed {
+                        float distSq;
+                        SyncedWorldPedEntry entry;
+                    };
+                    CandidatePed best[kMaxSyncedWorldPeds];
+                    int foundCount = 0;
+
+                    if (objects && byteMap && poolSize > 0 && poolSize <= 256) {
+                        for (int32_t s = 0; s < poolSize; ++s) {
+                            if ((byteMap[s] & 0x80) != 0) continue; // Slot libre
+                            void* pPed = reinterpret_cast<void*>(objects + static_cast<size_t>(s) * 0x9c8);
+                            if (pPed == localPed) continue;
+                            bool isRemotePlayerPed = false;
+                            for (int r = 0; r < kMaxCoopPlayers; ++r) {
+                                if (pPed == remotePedPtr_[r]) {
+                                    isRemotePlayerPed = true;
+                                    break;
+                                }
+                            }
+                            if (isRemotePlayerPed) continue;
+
+                            uintptr_t pAddr = reinterpret_cast<uintptr_t>(pPed);
+                            float pHealth = *reinterpret_cast<float*>(pAddr + 0x6ac);
+                            if (!std::isfinite(pHealth) || pHealth <= 0.0f) continue;
+
+                            uintptr_t pMat = *reinterpret_cast<uintptr_t*>(pAddr + 0x18);
+                            if (pMat == 0) continue;
+                            float px = *reinterpret_cast<float*>(pMat + 0x30);
+                            float py = *reinterpret_cast<float*>(pMat + 0x34);
+                            float pz = *reinterpret_cast<float*>(pMat + 0x38);
+                            if (!std::isfinite(px) || !std::isfinite(py) || !std::isfinite(pz)) continue;
+
+                            float dx = px - me.x;
+                            float dy = py - me.y;
+                            float dz = pz - me.z;
+                            float dSq = dx * dx + dy * dy + dz * dz;
+                            if (dSq > (85.0f * 85.0f)) continue;
+
+                            SyncedWorldPedEntry e{};
+                            e.active = 1;
+                            e.hostPoolSlot = static_cast<int16_t>(s);
+                            e.modelId = *reinterpret_cast<int16_t*>(pAddr + 0x22);
+                            e.x = px;
+                            e.y = py;
+                            e.z = pz;
+                            e.vx = *reinterpret_cast<float*>(pAddr + 0x68);
+                            e.vy = *reinterpret_cast<float*>(pAddr + 0x6c);
+                            e.vz = *reinterpret_cast<float*>(pAddr + 0x70);
+                            e.heading = *reinterpret_cast<float*>(pAddr + 0x6c4);
+                            int32_t ms = *reinterpret_cast<int32_t*>(pAddr + 0x550);
+                            e.moveState = static_cast<uint8_t>(std::clamp(ms, 1, 7));
+                            e.health = static_cast<uint8_t>(std::clamp(static_cast<int>(pHealth), 1, 200));
+
+                            if (foundCount < kMaxSyncedWorldPeds) {
+                                best[foundCount++] = CandidatePed{dSq, e};
+                            } else {
+                                int worstIdx = 0;
+                                for (int w = 1; w < kMaxSyncedWorldPeds; ++w) {
+                                    if (best[w].distSq > best[worstIdx].distSq) worstIdx = w;
+                                }
+                                if (dSq < best[worstIdx].distSq) {
+                                    best[worstIdx] = CandidatePed{dSq, e};
+                                }
+                            }
+                        }
+                    }
+
+                    worldState_.numPeds = static_cast<uint8_t>(foundCount);
+                    for (int k = 0; k < kMaxSyncedWorldPeds; ++k) {
+                        if (k < foundCount) {
+                            worldState_.peds[k] = best[k].entry;
+                        } else {
+                            worldState_.peds[k].active = 0;
+                            worldState_.peds[k].hostPoolSlot = -1;
+                        }
+                    }
+                }
+            }
+        } else if (worldState_.lastNetworkUpdateMs > 0 && (nowMs - worldState_.lastNetworkUpdateMs) < 20000) {
+            // Aplicar hora exacta y clima del Host en el Guest
+            if (gtaSymbols_.clockHours) *gtaSymbols_.clockHours = worldState_.clockHours;
+            if (gtaSymbols_.clockMinutes) *gtaSymbols_.clockMinutes = worldState_.clockMinutes;
+            if (gtaSymbols_.clockSeconds) *gtaSymbols_.clockSeconds = worldState_.clockSeconds;
+            if (gtaSymbols_.oldWeatherType) *gtaSymbols_.oldWeatherType = worldState_.oldWeather;
+            if (gtaSymbols_.newWeatherType) *gtaSymbols_.newWeatherType = worldState_.newWeather;
+
+            // Desactivar generación aleatoria local de policías/pandillas en el Guest y limpiar RANDOM_CHARs cada ~45 frames
+            if (gtaSymbols_.dontCreateRandomCops) *gtaSymbols_.dontCreateRandomCops = 1;
+            if (gtaSymbols_.dontCreateRandomGangMembers) *gtaSymbols_.dontCreateRandomGangMembers = 1;
+            if ((tickCount % 45 == 0) && gtaSymbols_.cpopulationRemoveAllRandomPedsFn) {
+                gtaSymbols_.cpopulationRemoveAllRandomPedsFn();
+            }
+
+            // Instanciar y actualizar en el Guest los peatones sincronizados desde el Host
+            for (int k = 0; k < kMaxSyncedWorldPeds; ++k) {
+                const SyncedWorldPedEntry& wp = worldState_.peds[k];
+                void* wPed = worldSyncPedPtr_[k];
+                if (wPed && gtaSymbols_.cpoolsGetPedFn && worldSyncPedHandle_[k] > 0) {
+                    if (gtaSymbols_.cpoolsGetPedFn(worldSyncPedHandle_[k]) != wPed) {
+                        wPed = nullptr;
+                        worldSyncPedPtr_[k] = nullptr;
+                        worldSyncPedHandle_[k] = -1;
+                    }
+                }
+
+                if (!wp.active) {
+                    if (wPed && gtaSymbols_.cpedTeleportFn) {
+                        // Ocultar bajo tierra hasta que el slot vuelva a usarse
+                        gtaSymbols_.cpedTeleportFn(wPed, CVector{me.x, me.y, -120.0f}, 0);
+                    }
+                    continue;
+                }
+
+                if (!wPed && gtaSymbols_.cpedOperatorNewFn && gtaSymbols_.ccivilianPedCtorFn && gtaSymbols_.cworldAddFn) {
+                    void* newWPed = gtaSymbols_.cpedOperatorNewFn(0x9c8);
+                    if (newWPed) {
+                        gtaSymbols_.ccivilianPedCtorFn(newWPed, 4 /*PED_TYPE_CIVMALE*/, 0 /*CJ model always loaded*/);
+                        uintptr_t wAddr = reinterpret_cast<uintptr_t>(newWPed);
+                        uintptr_t wIntel = *reinterpret_cast<uintptr_t*>(wAddr + 0x538);
+                        if (wIntel != 0 && gtaSymbols_.ctaskOperatorNewFn &&
+                            gtaSymbols_.ctaskSimpleStandStillCtorFn && gtaSymbols_.ctaskManagerSetTaskFn) {
+                            void* task = gtaSymbols_.ctaskOperatorNewFn(0x28);
+                            if (task) {
+                                gtaSymbols_.ctaskSimpleStandStillCtorFn(task, 999999, true, false, 8.0f);
+                                gtaSymbols_.ctaskManagerSetTaskFn(reinterpret_cast<void*>(wIntel + 8), task, 4, false);
+                            }
+                        }
+                        if (gtaSymbols_.cpedSetCharCreatedByFn) {
+                            gtaSymbols_.cpedSetCharCreatedByFn(newWPed, 2 /*MISSION_CHAR so RemoveAllRandomPeds preserves it*/);
+                        }
+                        *reinterpret_cast<float*>(wAddr + 0x6ac) = 100.0f;
+                        *reinterpret_cast<float*>(wAddr + 0x6b0) = 100.0f;
+                        uintptr_t wMat = *reinterpret_cast<uintptr_t*>(wAddr + 0x18);
+                        if (wMat != 0) {
+                            *reinterpret_cast<float*>(wMat + 0x30) = wp.x;
+                            *reinterpret_cast<float*>(wMat + 0x34) = wp.y;
+                            *reinterpret_cast<float*>(wMat + 0x38) = wp.z;
+                        }
+                        *reinterpret_cast<float*>(wAddr + 0x08) = wp.x;
+                        *reinterpret_cast<float*>(wAddr + 0x0c) = wp.y;
+                        *reinterpret_cast<float*>(wAddr + 0x10) = wp.z;
+                        gtaSymbols_.cworldAddFn(newWPed);
+                        worldSyncPedPtr_[k] = newWPed;
+                        worldSyncPedHandle_[k] = gtaSymbols_.cpoolsGetPedRefFn ? gtaSymbols_.cpoolsGetPedRefFn(newWPed) : -1;
+                        worldSyncPedHostSlot_[k] = wp.hostPoolSlot;
+                        wPed = newWPed;
+                    }
+                }
+
+                if (wPed) {
+                    if (worldSyncPedHostSlot_[k] != wp.hostPoolSlot && gtaSymbols_.cpedTeleportFn) {
+                        gtaSymbols_.cpedTeleportFn(wPed, CVector{wp.x, wp.y, wp.z}, 0);
+                        worldSyncPedHostSlot_[k] = wp.hostPoolSlot;
+                    }
+                    applySmoothPedTransformAndAnim(
+                        wPed, wp.x, wp.y, wp.z,
+                        wp.vx, wp.vy, wp.vz, wp.heading,
+                        static_cast<int>(wp.moveState), static_cast<float>(wp.health)
+                    );
+                }
+            }
         }
 
         // Procesar e instanciar jugadores remotos en el mundo 3D de GTA San Andreas
@@ -737,48 +1081,12 @@ public:
                 }
             }
 
-            if (ped && gtaSymbols_.cpedTeleportFn) {
-                uintptr_t pedAddr = reinterpret_cast<uintptr_t>(ped);
-                // Mantener vivo al actor remoto (+0x6ac = m_fHealth en arm64)
-                *reinterpret_cast<float*>(pedAddr + 0x6ac) = 200.0f;
-
-                uintptr_t mat = *reinterpret_cast<uintptr_t*>(pedAddr + 0x18);
-                float curX = rem.x, curY = rem.y, curZ = rem.z;
-                if (mat != 0) {
-                    curX = *reinterpret_cast<float*>(mat + 0x30);
-                    curY = *reinterpret_cast<float*>(mat + 0x34);
-                    curZ = *reinterpret_cast<float*>(mat + 0x38);
-                }
-
-                float dx = rem.x - curX;
-                float dy = rem.y - curY;
-                float dz = rem.z - curZ;
-                float distSq = dx * dx + dy * dy + dz * dz;
-
-                float nextX = (distSq > 16.0f) ? rem.x : (curX + dx * 0.55f);
-                float nextY = (distSq > 16.0f) ? rem.y : (curY + dy * 0.55f);
-                float nextZ = (distSq > 16.0f) ? rem.z : (curZ + dz * 0.55f);
-
-                // Usar CPed::Teleport nativo de Rockstar (CWorld::Remove + matriz + RwObject + CWorld::Add)
-                if (distSq > 0.0004f) {
-                    gtaSymbols_.cpedTeleportFn(ped, CVector{nextX, nextY, nextZ}, 0);
-                }
-
-                // Actualizar orientación Z en CMatrix y velocidad física en +0x68..0x70
-                mat = *reinterpret_cast<uintptr_t*>(pedAddr + 0x18);
-                if (mat != 0 && std::isfinite(rem.heading)) {
-                    float c = std::cos(rem.heading);
-                    float s = std::sin(rem.heading);
-                    *reinterpret_cast<float*>(mat + 0x00) = c;
-                    *reinterpret_cast<float*>(mat + 0x04) = s;
-                    *reinterpret_cast<float*>(mat + 0x08) = 0.0f;
-                    *reinterpret_cast<float*>(mat + 0x10) = -s;
-                    *reinterpret_cast<float*>(mat + 0x14) = c;
-                    *reinterpret_cast<float*>(mat + 0x18) = 0.0f;
-                }
-                *reinterpret_cast<float*>(pedAddr + 0x68) = rem.vx;
-                *reinterpret_cast<float*>(pedAddr + 0x6c) = rem.vy;
-                *reinterpret_cast<float*>(pedAddr + 0x70) = rem.vz;
+            if (ped) {
+                applySmoothPedTransformAndAnim(
+                    ped, rem.x, rem.y, rem.z,
+                    rem.vx, rem.vy, rem.vz, rem.heading,
+                    static_cast<int>(rem.animId), 200.0f
+                );
             }
         }
 #endif
@@ -878,6 +1186,10 @@ public:
                     int mySlot = config_.localPlayerSlot;
                     PedSyncPacket pedPkt = buildPedSyncPacket(mySlot);
                     MissionSyncPacket misPkt = buildMissionSyncPacket();
+                    WorldSyncPacket worldPkt{};
+                    if (config_.isHost) {
+                        worldPkt = buildWorldSyncPacket();
+                    }
 
                     std::vector<sockaddr_in> peersCopy;
                     {
@@ -898,6 +1210,7 @@ public:
                         }
                         if (config_.isHost) {
                             ::sendto(sock, &misPkt, sizeof(misPkt), 0, reinterpret_cast<const sockaddr*>(&dest), sizeof(dest));
+                            ::sendto(sock, &worldPkt, sizeof(worldPkt), 0, reinterpret_cast<const sockaddr*>(&dest), sizeof(dest));
                         }
                     }
 
@@ -1055,6 +1368,22 @@ public:
         return pkt;
     }
 
+    WorldSyncPacket buildWorldSyncPacket() {
+        std::lock_guard<std::mutex> lock(mutex_);
+        WorldSyncPacket pkt{};
+        fillHeaderLocked(pkt.header, PKT_WORLD_SYNC, static_cast<uint8_t>(config_.localPlayerSlot));
+        pkt.clockHours = worldState_.clockHours;
+        pkt.clockMinutes = worldState_.clockMinutes;
+        pkt.clockSeconds = worldState_.clockSeconds;
+        pkt.oldWeather = worldState_.oldWeather;
+        pkt.newWeather = worldState_.newWeather;
+        pkt.numPeds = worldState_.numPeds;
+        for (int k = 0; k < kMaxSyncedWorldPeds; ++k) {
+            pkt.peds[k] = worldState_.peds[k];
+        }
+        return pkt;
+    }
+
     WeaponFirePacket buildWeaponFirePacket(int slot, int weaponId, float targetX, float targetY, float targetZ) {
         std::lock_guard<std::mutex> lock(mutex_);
         int idx = std::clamp(slot, 1, kMaxCoopPlayers) - 1;
@@ -1183,6 +1512,22 @@ public:
                 p.lastAimOrigin = wf->muzzleOrigin;
                 p.lastAimTarget = wf->targetImpact;
                 p.shotsFiredCount++;
+                packetsProcessed_.fetch_add(1);
+                return true;
+            }
+            case PKT_WORLD_SYNC: {
+                if (len < sizeof(WorldSyncPacket)) return false;
+                const auto* ws = reinterpret_cast<const WorldSyncPacket*>(data);
+                worldState_.lastNetworkUpdateMs = nowMs;
+                worldState_.clockHours = ws->clockHours;
+                worldState_.clockMinutes = ws->clockMinutes;
+                worldState_.clockSeconds = ws->clockSeconds;
+                worldState_.oldWeather = ws->oldWeather;
+                worldState_.newWeather = ws->newWeather;
+                worldState_.numPeds = std::min<uint8_t>(ws->numPeds, kMaxSyncedWorldPeds);
+                for (int k = 0; k < kMaxSyncedWorldPeds; ++k) {
+                    worldState_.peds[k] = ws->peds[k];
+                }
                 packetsProcessed_.fetch_add(1);
                 return true;
             }
@@ -1458,12 +1803,13 @@ public:
         }
         int localIdx = std::clamp(config_.localPlayerSlot, 1, kMaxCoopPlayers) - 1;
         int remoteIdx = (localIdx == 0) ? 1 : 0;
-        char buf[860];
+        char buf[960];
         std::snprintf(
             buf, sizeof(buf),
-            "libCoopAndreasBridge.so v2.3 (Tornamic Port) | Role=%s (Slot %d) | Room=%s | UDP=%d/%d | "
-            "Players=%d/%d | Cam=%s | GOTHook=%s (Ticks=%lld) | LocalCJ=(%.1f,%.1f,%.1f) | "
-            "RemoteP%d=(%.1f,%.1f,%.1f ped=%p) | $ONMISSION=%d (%s CP#%d) | Opcodes=%lld | Packets=%lld",
+            "libCoopAndreasBridge.so v2.4 (Tornamic Port) | Role=%s (Slot %d) | Room=%s | UDP=%d/%d | "
+            "Players=%d/%d | Cam=%s | GOTHook=%s (Ticks=%lld) | LocalCJ=(%.1f,%.1f,%.1f anim=%u) | "
+            "RemoteP%d=(%.1f,%.1f,%.1f ped=%p anim=%u) | Clock=%02u:%02u Weather=%d/%d WorldPeds=%u | "
+            "$ONMISSION=%d (%s CP#%d) | Opcodes=%lld | Packets=%lld",
             config_.isHost ? "HOST" : "GUEST",
             config_.localPlayerSlot,
             config_.roomCode.c_str(),
@@ -1472,8 +1818,11 @@ public:
             (config_.cameraMode == 0) ? "3D_INDEPENDENT" : "SHARED",
             gotHookInstalled_.load() ? "ACTIVE" : "PENDING",
             static_cast<long long>(mainThreadTicks_.load()),
-            players_[localIdx].x, players_[localIdx].y, players_[localIdx].z,
-            remoteIdx + 1, players_[remoteIdx].x, players_[remoteIdx].y, players_[remoteIdx].z, remotePedPtr_[remoteIdx],
+            players_[localIdx].x, players_[localIdx].y, players_[localIdx].z, players_[localIdx].animId,
+            remoteIdx + 1, players_[remoteIdx].x, players_[remoteIdx].y, players_[remoteIdx].z,
+            remotePedPtr_[remoteIdx], players_[remoteIdx].animId,
+            worldState_.clockHours, worldState_.clockMinutes,
+            worldState_.oldWeather, worldState_.newWeather, worldState_.numPeds,
             mission_.onMissionFlag,
             mission_.missionId,
             mission_.checkpointIndex,
@@ -1678,6 +2027,7 @@ private:
     BridgeConfig config_;
     PlayerState3D players_[kMaxCoopPlayers];
     MissionSyncState mission_;
+    WorldSyncState worldState_;
 
     void* lastLocalPedPtr_ = nullptr;
     bool initialSyncTeleportDone_ = false;
@@ -1685,6 +2035,10 @@ private:
     int remotePedHandle_[kMaxCoopPlayers] = {-1, -1, -1, -1, -1, -1, -1, -1};
     int remotePedSpawnedModel_[kMaxCoopPlayers] = {0};
     int remoteBlipHandle_[kMaxCoopPlayers] = {-1, -1, -1, -1, -1, -1, -1, -1};
+
+    void* worldSyncPedPtr_[kMaxSyncedWorldPeds] = {nullptr};
+    int worldSyncPedHandle_[kMaxSyncedWorldPeds] = {-1, -1, -1, -1, -1, -1};
+    int16_t worldSyncPedHostSlot_[kMaxSyncedWorldPeds] = {-1, -1, -1, -1, -1, -1};
 
 #if defined(__unix__) || defined(__ANDROID__) || defined(__linux__)
     std::vector<PeerEndpoint> activePeers_;
