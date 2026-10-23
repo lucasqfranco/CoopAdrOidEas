@@ -75,6 +75,7 @@ enum PacketType : uint8_t {
 };
 
 constexpr int kMaxSyncedWorldPeds = 6;
+constexpr int kMaxSyncedWorldVehicles = 5;
 
 // Opcodes Personalizados estilo sa_sbl_coopandreas (0D00 - 0D04)
 enum CustomCoopOpcode : uint16_t {
@@ -188,6 +189,24 @@ struct SyncedWorldPedEntry {
     uint8_t health = 100;
 };
 
+struct SyncedWorldVehicleEntry {
+    uint8_t active = 0;
+    int16_t hostPoolSlot = -1;
+    int16_t modelId = 492;
+    float x = 0.0f;
+    float y = 0.0f;
+    float z = 0.0f;
+    float rightX = 1.0f;
+    float rightY = 0.0f;
+    float rightZ = 0.0f;
+    float upX = 0.0f;
+    float upY = 1.0f;
+    float upZ = 0.0f;
+    float vx = 0.0f;
+    float vy = 0.0f;
+    float vz = 0.0f;
+};
+
 struct WorldSyncPacket {
     BinaryPacketHeader header;
     uint8_t clockHours = 12;
@@ -196,7 +215,9 @@ struct WorldSyncPacket {
     int16_t oldWeather = 0;
     int16_t newWeather = 0;
     uint8_t numPeds = 0;
+    uint8_t numVehicles = 0;
     SyncedWorldPedEntry peds[kMaxSyncedWorldPeds];
+    SyncedWorldVehicleEntry vehicles[kMaxSyncedWorldVehicles];
 };
 
 // Archivo binario de memoria compartida (coop_telemetry.bin) entre libCoopAndreasBridge.so,
@@ -302,6 +323,11 @@ struct GtaSaNativeSymbols {
     using FnCPedSetMoveState = void (*)(void* thisPed, int moveState);
     using FnCPedSetMoveAnim = void (*)(void* thisPed);
     using FnCPopulationRemoveAllRandomPeds = void (*)();
+    using FnRpAnimBlendClumpUpdateAnimations = void (*)(void* clump, float timeStep, bool onScreen);
+    using FnCCarCtrlCreateCarForScript = void* (*)(int modelId, CVector pos, uint8_t doMissionCleanup);
+    using FnCPoolsGetVehicleRef = int (*)(void* veh);
+    using FnCPoolsGetVehicle = void* (*)(int handle);
+    using FnCWorldClearCarsFromArea = void (*)(float x1, float y1, float z1, float x2, float y2, float z2);
 
     FnCTaskOperatorNew ctaskOperatorNewFn = nullptr;
     FnCTaskSimpleStandStillCtor ctaskSimpleStandStillCtorFn = nullptr;
@@ -309,6 +335,11 @@ struct GtaSaNativeSymbols {
     FnCPedSetMoveState cpedSetMoveStateFn = nullptr;
     FnCPedSetMoveAnim cpedSetMoveAnimFn = nullptr;
     FnCPopulationRemoveAllRandomPeds cpopulationRemoveAllRandomPedsFn = nullptr;
+    FnRpAnimBlendClumpUpdateAnimations rpAnimBlendClumpUpdateAnimationsFn = nullptr;
+    FnCCarCtrlCreateCarForScript ccarCtrlCreateCarForScriptFn = nullptr;
+    FnCPoolsGetVehicleRef cpoolsGetVehicleRefFn = nullptr;
+    FnCPoolsGetVehicle cpoolsGetVehicleFn = nullptr;
+    FnCWorldClearCarsFromArea cworldClearCarsFromAreaFn = nullptr;
 
     uint8_t* bPlayersCanBeInSeparateCars = nullptr; // _ZN10CGameLogic27bPlayersCanBeInSeparateCarsE
     uint8_t* clockHours = nullptr;                  // _ZN6CClock18ms_nGameClockHoursE
@@ -318,6 +349,10 @@ struct GtaSaNativeSymbols {
     int16_t* newWeatherType = nullptr;              // _ZN8CWeather14NewWeatherTypeE
     uint8_t* dontCreateRandomCops = nullptr;        // _ZN11CPopulation23m_bDontCreateRandomCopsE
     uint8_t* dontCreateRandomGangMembers = nullptr; // _ZN11CPopulation30m_bDontCreateRandomGangMembersE
+    float* pedDensityMultiplier = nullptr;          // _ZN11CPopulation20PedDensityMultiplierE
+    int32_t* maxNumberOfPedsInUse = nullptr;        // _ZN11CPopulation20MaxNumberOfPedsInUseE
+    float* carDensityMultiplier = nullptr;          // _ZN8CCarCtrl20CarDensityMultiplierE
+    int32_t* maxNumberOfCarsInUse = nullptr;        // _ZN8CCarCtrl20MaxNumberOfCarsInUseE
 
     bool allCoreResolved = false;
 
@@ -387,6 +422,11 @@ struct GtaSaNativeSymbols {
         cpedSetMoveStateFn = reinterpret_cast<FnCPedSetMoveState>(dlsym(libHandle, "_ZN4CPed12SetMoveStateE10eMoveState"));
         cpedSetMoveAnimFn = reinterpret_cast<FnCPedSetMoveAnim>(dlsym(libHandle, "_ZN4CPed11SetMoveAnimEv"));
         cpopulationRemoveAllRandomPedsFn = reinterpret_cast<FnCPopulationRemoveAllRandomPeds>(dlsym(libHandle, "_ZN11CPopulation19RemoveAllRandomPedsEv"));
+        rpAnimBlendClumpUpdateAnimationsFn = reinterpret_cast<FnRpAnimBlendClumpUpdateAnimations>(dlsym(libHandle, "_Z32RpAnimBlendClumpUpdateAnimationsP7RpClumpfb"));
+        ccarCtrlCreateCarForScriptFn = reinterpret_cast<FnCCarCtrlCreateCarForScript>(dlsym(libHandle, "_ZN8CCarCtrl18CreateCarForScriptEi7CVectorh"));
+        cpoolsGetVehicleRefFn = reinterpret_cast<FnCPoolsGetVehicleRef>(dlsym(libHandle, "_ZN6CPools13GetVehicleRefEP8CVehicle"));
+        cpoolsGetVehicleFn = reinterpret_cast<FnCPoolsGetVehicle>(dlsym(libHandle, "_ZN6CPools10GetVehicleEi"));
+        cworldClearCarsFromAreaFn = reinterpret_cast<FnCWorldClearCarsFromArea>(dlsym(libHandle, "_ZN6CWorld17ClearCarsFromAreaEffffff"));
 
         bPlayersCanBeInSeparateCars = reinterpret_cast<uint8_t*>(dlsym(libHandle, "_ZN10CGameLogic27bPlayersCanBeInSeparateCarsE"));
         clockHours = reinterpret_cast<uint8_t*>(dlsym(libHandle, "_ZN6CClock18ms_nGameClockHoursE"));
@@ -396,6 +436,10 @@ struct GtaSaNativeSymbols {
         newWeatherType = reinterpret_cast<int16_t*>(dlsym(libHandle, "_ZN8CWeather14NewWeatherTypeE"));
         dontCreateRandomCops = reinterpret_cast<uint8_t*>(dlsym(libHandle, "_ZN11CPopulation23m_bDontCreateRandomCopsE"));
         dontCreateRandomGangMembers = reinterpret_cast<uint8_t*>(dlsym(libHandle, "_ZN11CPopulation30m_bDontCreateRandomGangMembersE"));
+        pedDensityMultiplier = reinterpret_cast<float*>(dlsym(libHandle, "_ZN11CPopulation20PedDensityMultiplierE"));
+        maxNumberOfPedsInUse = reinterpret_cast<int32_t*>(dlsym(libHandle, "_ZN11CPopulation20MaxNumberOfPedsInUseE"));
+        carDensityMultiplier = reinterpret_cast<float*>(dlsym(libHandle, "_ZN8CCarCtrl20CarDensityMultiplierE"));
+        maxNumberOfCarsInUse = reinterpret_cast<int32_t*>(dlsym(libHandle, "_ZN8CCarCtrl20MaxNumberOfCarsInUseE"));
 
         if (cworldProcessFn) {
             Dl_info info{};
@@ -405,10 +449,11 @@ struct GtaSaNativeSymbols {
         }
 
         allCoreResolved = (cworldPlayers != nullptr && scriptSpace != nullptr && processOneCommandFn != nullptr);
-        LOGI("libGTASA.so resolved (base=0x%lx): CWorld::Players=%p, PedPool=%p, VehPool=%p, CClock=%p:%p, CWeather=%p, SetMoveAnim=%p, RemoveRandomPeds=%p",
+        LOGI("libGTASA.so resolved (base=0x%lx): CWorld::Players=%p, PedPool=%p, VehPool=%p, CreateCar=%p, ClearCars=%p, UpdateAnims=%p",
              static_cast<unsigned long>(libBase), cworldPlayers, cpoolsPedPool, cpoolsVehiclePool,
-             clockHours, clockMinutes, oldWeatherType,
-             reinterpret_cast<void*>(cpedSetMoveAnimFn), reinterpret_cast<void*>(cpopulationRemoveAllRandomPedsFn));
+             reinterpret_cast<void*>(ccarCtrlCreateCarForScriptFn),
+             reinterpret_cast<void*>(cworldClearCarsFromAreaFn),
+             reinterpret_cast<void*>(rpAnimBlendClumpUpdateAnimationsFn));
         return allCoreResolved;
 #else
         return false;
@@ -479,7 +524,9 @@ struct WorldSyncState {
     int16_t oldWeather = 0;
     int16_t newWeather = 0;
     uint8_t numPeds = 0;
+    uint8_t numVehicles = 0;
     SyncedWorldPedEntry peds[kMaxSyncedWorldPeds];
+    SyncedWorldVehicleEntry vehicles[kMaxSyncedWorldVehicles];
 };
 
 struct BridgeConfig {
@@ -560,6 +607,25 @@ public:
         void* targetFn = reinterpret_cast<void*>(gtaSymbols_.cworldProcessFn);
         g_origCWorldProcess = gtaSymbols_.cworldProcessFn;
 
+        // 0. En libGTASA.so v2.10 arm64, CTaskSimpleStandStill::ProcessPed (0x5ef6ec) llama a
+        // CPed::SetMoveState(ped, 1) en 0x5ef7f0 en cada frame subsiguiente, sobrescribiendo el
+        // estado de caminar/correr de los actores sincronizados antes de RpAnimBlendClumpUpdateAnimations.
+        // Al parchear esa única llamada secundaria (manteniendo la inicial en 0x5ef77c intacta),
+        // CPed::ProcessControl mantiene y avanza las animaciones de caminar/correr fluidamente.
+        if (gtaSymbols_.libBase != 0) {
+            uintptr_t standStillResetAddr = gtaSymbols_.libBase + 0x5ef7f0;
+            uintptr_t textPage = standStillResetAddr & ~static_cast<uintptr_t>(0xFFF);
+            if (::mprotect(reinterpret_cast<void*>(textPage), 4096, PROT_READ | PROT_WRITE | PROT_EXEC) == 0) {
+                uint32_t* insn = reinterpret_cast<uint32_t*>(standStillResetAddr);
+                if (*insn == 0x97f10700U) {
+                    *insn = 0xd503201fU; // NOP
+                    __builtin___clear_cache(reinterpret_cast<char*>(insn), reinterpret_cast<char*>(insn + 1));
+                    LOGI("Patched CTaskSimpleStandStill::ProcessPed per-tick SetMoveState reset at 0x%lx",
+                         static_cast<unsigned long>(standStillResetAddr));
+                }
+            }
+        }
+
         // 1. Check exact GOT offset 0x843fb0 in libGTASA.so v2.10 arm64-v8a first
         if (gtaSymbols_.libBase != 0) {
             uintptr_t candidateGot = gtaSymbols_.libBase + 0x843fb0;
@@ -636,9 +702,9 @@ public:
         float speed2d = std::sqrt(vx * vx + vy * vy);
         int effectiveMoveState = moveState;
         if (effectiveMoveState != 4 && effectiveMoveState != 6 && effectiveMoveState != 7) {
-            if (speed2d > 0.16f) effectiveMoveState = 7;      // PEDMOVE_SPRINT
-            else if (speed2d > 0.06f) effectiveMoveState = 6; // PEDMOVE_RUN
-            else if (speed2d > 0.01f || (distSq > 0.0009f && distSq < 25.0f)) effectiveMoveState = 4; // PEDMOVE_WALK
+            if (speed2d > 0.14f) effectiveMoveState = 7;      // PEDMOVE_SPRINT
+            else if (speed2d > 0.05f) effectiveMoveState = 6; // PEDMOVE_RUN
+            else if (speed2d > 0.008f || (distSq > 0.0004f && distSq < 25.0f)) effectiveMoveState = 4; // PEDMOVE_WALK
             else effectiveMoveState = 1;                      // PEDMOVE_STILL
         }
 
@@ -684,7 +750,11 @@ public:
             gtaSymbols_.cworldAddFn(ped);
         }
 
-        // Aplicar animación de caminar / correr / sprint / quieto en el RpClump
+        // CRÍTICO: En libGTASA.so arm64 v2.10, CPed::SetMoveAnim (0x596cb4) lee m_fMoveAnimRate (+0x688)
+        // en 0x596fec y lo escribe en CAnimBlendAssociation::m_fSpeed (+0x3c) en 0x59707c.
+        // En un CCivilianPed sin pad local, +0x688 vale 0.0f por defecto, congelando la animación en el frame 0.
+        *reinterpret_cast<float*>(pedAddr + 0x688) = (effectiveMoveState > 1) ? 1.0f : 0.0f;
+
         if (gtaSymbols_.cpedSetMoveStateFn) {
             gtaSymbols_.cpedSetMoveStateFn(ped, effectiveMoveState);
         } else {
@@ -693,6 +763,70 @@ public:
         if (gtaSymbols_.cpedSetMoveAnimFn) {
             gtaSymbols_.cpedSetMoveAnimFn(ped);
         }
+        if (effectiveMoveState > 1 && gtaSymbols_.rpAnimBlendClumpUpdateAnimationsFn) {
+            void* clump = *reinterpret_cast<void**>(pedAddr + 0x20);
+            if (clump) {
+                gtaSymbols_.rpAnimBlendClumpUpdateAnimationsFn(clump, 0.016f, true);
+            }
+        }
+#endif
+    }
+
+    // ========================================================================
+    // HELPER: ACTUALIZAR TRANSFORMACIÓN 3D Y VELOCIDAD DE UN CVEHICLE SINCRONIZADO
+    // ========================================================================
+    void applySmoothVehicleTransform(void* veh, const SyncedWorldVehicleEntry& ve) {
+#if defined(__unix__) || defined(__ANDROID__) || defined(__linux__)
+        if (!veh) return;
+        uintptr_t vehAddr = reinterpret_cast<uintptr_t>(veh);
+        uintptr_t mat = *reinterpret_cast<uintptr_t*>(vehAddr + 0x18);
+        if (mat == 0 || !gtaSymbols_.cworldRemoveFn || !gtaSymbols_.cworldAddFn) return;
+
+        float curX = *reinterpret_cast<float*>(mat + 0x30);
+        float curY = *reinterpret_cast<float*>(mat + 0x34);
+        float curZ = *reinterpret_cast<float*>(mat + 0x38);
+        float dx = ve.x - curX;
+        float dy = ve.y - curY;
+        float dz = ve.z - curZ;
+        float distSq = dx * dx + dy * dy + dz * dz;
+
+        float nextX = (distSq > 36.0f) ? ve.x : (curX + dx * 0.65f);
+        float nextY = (distSq > 36.0f) ? ve.y : (curY + dy * 0.65f);
+        float nextZ = (distSq > 36.0f) ? ve.z : (curZ + dz * 0.65f);
+
+        gtaSymbols_.cworldRemoveFn(veh);
+
+        float rx = ve.rightX, ry = ve.rightY, rz = ve.rightZ;
+        float ux = ve.upX, uy = ve.upY, uz = ve.upZ;
+        // at = cross(right, up)
+        float ax = ry * uz - rz * uy;
+        float ay = rz * ux - rx * uz;
+        float az = rx * uy - ry * ux;
+
+        *reinterpret_cast<float*>(mat + 0x00) = rx;
+        *reinterpret_cast<float*>(mat + 0x04) = ry;
+        *reinterpret_cast<float*>(mat + 0x08) = rz;
+        *reinterpret_cast<float*>(mat + 0x10) = ux;
+        *reinterpret_cast<float*>(mat + 0x14) = uy;
+        *reinterpret_cast<float*>(mat + 0x18) = uz;
+        *reinterpret_cast<float*>(mat + 0x20) = ax;
+        *reinterpret_cast<float*>(mat + 0x24) = ay;
+        *reinterpret_cast<float*>(mat + 0x28) = az;
+        *reinterpret_cast<float*>(mat + 0x30) = nextX;
+        *reinterpret_cast<float*>(mat + 0x34) = nextY;
+        *reinterpret_cast<float*>(mat + 0x38) = nextZ;
+
+        *reinterpret_cast<float*>(vehAddr + 0x08) = nextX;
+        *reinterpret_cast<float*>(vehAddr + 0x0c) = nextY;
+        *reinterpret_cast<float*>(vehAddr + 0x10) = nextZ;
+        *reinterpret_cast<float*>(vehAddr + 0x68) = ve.vx;
+        *reinterpret_cast<float*>(vehAddr + 0x6c) = ve.vy;
+        *reinterpret_cast<float*>(vehAddr + 0x70) = ve.vz;
+
+        if (gtaSymbols_.centityUpdateRwFrameFn) {
+            gtaSymbols_.centityUpdateRwFrameFn(veh);
+        }
+        gtaSymbols_.cworldAddFn(veh);
 #endif
     }
 
@@ -716,6 +850,13 @@ public:
                 worldSyncPedPtr_[k] = nullptr;
                 worldSyncPedHandle_[k] = -1;
                 worldSyncPedHostSlot_[k] = -1;
+                worldSyncPedModel_[k] = -1;
+            }
+            for (int v = 0; v < kMaxSyncedWorldVehicles; ++v) {
+                worldSyncVehPtr_[v] = nullptr;
+                worldSyncVehHandle_[v] = -1;
+                worldSyncVehHostSlot_[v] = -1;
+                worldSyncVehModel_[v] = -1;
             }
             return;
         }
@@ -732,6 +873,13 @@ public:
                 worldSyncPedPtr_[k] = nullptr;
                 worldSyncPedHandle_[k] = -1;
                 worldSyncPedHostSlot_[k] = -1;
+                worldSyncPedModel_[k] = -1;
+            }
+            for (int v = 0; v < kMaxSyncedWorldVehicles; ++v) {
+                worldSyncVehPtr_[v] = nullptr;
+                worldSyncVehHandle_[v] = -1;
+                worldSyncVehHostSlot_[v] = -1;
+                worldSyncVehModel_[v] = -1;
             }
             LOGI("Local Player CJ detected in world: CPlayerPed=%p", localPed);
         }
@@ -771,6 +919,13 @@ public:
         };
 
         int32_t localMoveState = *reinterpret_cast<int32_t*>(localPedAddr + 0x550);
+        float mySpeed2d = std::sqrt(mySpeed.x * mySpeed.x + mySpeed.y * mySpeed.y);
+        if (localMoveState != 4 && localMoveState != 6 && localMoveState != 7) {
+            if (mySpeed2d > 0.14f) localMoveState = 7;
+            else if (mySpeed2d > 0.05f) localMoveState = 6;
+            else if (mySpeed2d > 0.008f) localMoveState = 4;
+            else localMoveState = 1;
+        }
         bool onMission = gtaSymbols_.isPlayerOnAMissionFn ? gtaSymbols_.isPlayerOnAMissionFn() : false;
 
         // En libGTASA.so arm64 v2.10: m_fHealth = +0x6ac, m_fMaxHealth = +0x6b0, m_fArmour = +0x6b4
@@ -799,12 +954,12 @@ public:
         me.armor = std::isfinite(rawArmor) ? std::clamp(static_cast<int>(rawArmor), 0, 200) : 0;
         me.animId = static_cast<uint16_t>(std::clamp(localMoveState, 0, 12));
         me.vehicleNetId = myVeh ? 101 : 0;
-        me.vehicleModelId = 492;
+        me.vehicleModelId = myVeh ? static_cast<int32_t>(*reinterpret_cast<int16_t*>(reinterpret_cast<uintptr_t>(myVeh) + 0x22)) : 492;
         me.seatIndex = myVeh ? 0 : -1;
         me.cameraMode = 0; // Cámara 3D Independiente
 
         // ====================================================================
-        // SINCRONIZACIÓN DE RELOJ (HORA), CLIMA Y PEATONES DEL MUNDO (HOST <-> GUEST)
+        // SINCRONIZACIÓN DE RELOJ (HORA), CLIMA, PEATONES Y VEHÍCULOS DEL MUNDO (HOST <-> GUEST)
         // ====================================================================
         if (config_.isHost) {
             mission_.onMissionFlag = onMission ? 1 : 0;
@@ -814,89 +969,175 @@ public:
             if (gtaSymbols_.oldWeatherType) worldState_.oldWeather = *gtaSymbols_.oldWeatherType;
             if (gtaSymbols_.newWeatherType) worldState_.newWeather = *gtaSymbols_.newWeatherType;
 
-            // Escanear CPools::ms_pPedPool cada 3 frames (~100ms) para replicar los 6 peatones más cercanos del Host al Guest
-            if ((tickCount % 3 == 0) && gtaSymbols_.cpoolsPedPool) {
-                void* poolPtr = *reinterpret_cast<void**>(gtaSymbols_.cpoolsPedPool);
-                if (poolPtr) {
-                    uintptr_t poolAddr = reinterpret_cast<uintptr_t>(poolPtr);
-                    uint8_t* objects = *reinterpret_cast<uint8_t**>(poolAddr + 0x00);
-                    uint8_t* byteMap = *reinterpret_cast<uint8_t**>(poolAddr + 0x08);
-                    int32_t poolSize = *reinterpret_cast<int32_t*>(poolAddr + 0x10);
+            // Escanear CPools::ms_pPedPool y CPools::ms_pVehiclePool cada 2 frames para replicar peatones y vehículos reales del Host al Guest
+            if (tickCount % 2 == 0) {
+                if (gtaSymbols_.cpoolsPedPool) {
+                    void* poolPtr = *reinterpret_cast<void**>(gtaSymbols_.cpoolsPedPool);
+                    if (poolPtr) {
+                        uintptr_t poolAddr = reinterpret_cast<uintptr_t>(poolPtr);
+                        uint8_t* objects = *reinterpret_cast<uint8_t**>(poolAddr + 0x00);
+                        uint8_t* byteMap = *reinterpret_cast<uint8_t**>(poolAddr + 0x08);
+                        int32_t poolSize = *reinterpret_cast<int32_t*>(poolAddr + 0x10);
 
-                    struct CandidatePed {
-                        float distSq;
-                        SyncedWorldPedEntry entry;
-                    };
-                    CandidatePed best[kMaxSyncedWorldPeds];
-                    int foundCount = 0;
+                        struct CandidatePed {
+                            float distSq;
+                            SyncedWorldPedEntry entry;
+                        };
+                        CandidatePed best[kMaxSyncedWorldPeds];
+                        int foundCount = 0;
 
-                    if (objects && byteMap && poolSize > 0 && poolSize <= 256) {
-                        for (int32_t s = 0; s < poolSize; ++s) {
-                            if ((byteMap[s] & 0x80) != 0) continue; // Slot libre
-                            void* pPed = reinterpret_cast<void*>(objects + static_cast<size_t>(s) * 0x9c8);
-                            if (pPed == localPed) continue;
-                            bool isRemotePlayerPed = false;
-                            for (int r = 0; r < kMaxCoopPlayers; ++r) {
-                                if (pPed == remotePedPtr_[r]) {
-                                    isRemotePlayerPed = true;
-                                    break;
+                        if (objects && byteMap && poolSize > 0 && poolSize <= 256) {
+                            for (int32_t s = 0; s < poolSize; ++s) {
+                                if ((byteMap[s] & 0x80) != 0) continue; // Slot libre
+                                void* pPed = reinterpret_cast<void*>(objects + static_cast<size_t>(s) * 0x9c8);
+                                if (pPed == localPed) continue;
+                                bool isRemotePlayerPed = false;
+                                for (int r = 0; r < kMaxCoopPlayers; ++r) {
+                                    if (pPed == remotePedPtr_[r]) {
+                                        isRemotePlayerPed = true;
+                                        break;
+                                    }
                                 }
-                            }
-                            if (isRemotePlayerPed) continue;
+                                if (isRemotePlayerPed) continue;
 
-                            uintptr_t pAddr = reinterpret_cast<uintptr_t>(pPed);
-                            float pHealth = *reinterpret_cast<float*>(pAddr + 0x6ac);
-                            if (!std::isfinite(pHealth) || pHealth <= 0.0f) continue;
+                                uintptr_t pAddr = reinterpret_cast<uintptr_t>(pPed);
+                                // Excluir peatones dentro de vehículos y excluir modelo 0 (CJ)
+                                if ((*reinterpret_cast<uint8_t*>(pAddr + 0x585) & 1) != 0) continue;
+                                int16_t pModelId = *reinterpret_cast<int16_t*>(pAddr + 0x22);
+                                if (pModelId <= 0 || pModelId > 300) continue;
 
-                            uintptr_t pMat = *reinterpret_cast<uintptr_t*>(pAddr + 0x18);
-                            if (pMat == 0) continue;
-                            float px = *reinterpret_cast<float*>(pMat + 0x30);
-                            float py = *reinterpret_cast<float*>(pMat + 0x34);
-                            float pz = *reinterpret_cast<float*>(pMat + 0x38);
-                            if (!std::isfinite(px) || !std::isfinite(py) || !std::isfinite(pz)) continue;
+                                float pHealth = *reinterpret_cast<float*>(pAddr + 0x6ac);
+                                if (!std::isfinite(pHealth) || pHealth <= 0.0f) continue;
 
-                            float dx = px - me.x;
-                            float dy = py - me.y;
-                            float dz = pz - me.z;
-                            float dSq = dx * dx + dy * dy + dz * dz;
-                            if (dSq > (85.0f * 85.0f)) continue;
+                                uintptr_t pMat = *reinterpret_cast<uintptr_t*>(pAddr + 0x18);
+                                if (pMat == 0) continue;
+                                float px = *reinterpret_cast<float*>(pMat + 0x30);
+                                float py = *reinterpret_cast<float*>(pMat + 0x34);
+                                float pz = *reinterpret_cast<float*>(pMat + 0x38);
+                                if (!std::isfinite(px) || !std::isfinite(py) || !std::isfinite(pz)) continue;
 
-                            SyncedWorldPedEntry e{};
-                            e.active = 1;
-                            e.hostPoolSlot = static_cast<int16_t>(s);
-                            e.modelId = *reinterpret_cast<int16_t*>(pAddr + 0x22);
-                            e.x = px;
-                            e.y = py;
-                            e.z = pz;
-                            e.vx = *reinterpret_cast<float*>(pAddr + 0x68);
-                            e.vy = *reinterpret_cast<float*>(pAddr + 0x6c);
-                            e.vz = *reinterpret_cast<float*>(pAddr + 0x70);
-                            e.heading = *reinterpret_cast<float*>(pAddr + 0x6c4);
-                            int32_t ms = *reinterpret_cast<int32_t*>(pAddr + 0x550);
-                            e.moveState = static_cast<uint8_t>(std::clamp(ms, 1, 7));
-                            e.health = static_cast<uint8_t>(std::clamp(static_cast<int>(pHealth), 1, 200));
+                                float dx = px - me.x;
+                                float dy = py - me.y;
+                                float dz = pz - me.z;
+                                float dSq = dx * dx + dy * dy + dz * dz;
+                                if (dSq > (90.0f * 90.0f)) continue;
 
-                            if (foundCount < kMaxSyncedWorldPeds) {
-                                best[foundCount++] = CandidatePed{dSq, e};
-                            } else {
-                                int worstIdx = 0;
-                                for (int w = 1; w < kMaxSyncedWorldPeds; ++w) {
-                                    if (best[w].distSq > best[worstIdx].distSq) worstIdx = w;
-                                }
-                                if (dSq < best[worstIdx].distSq) {
-                                    best[worstIdx] = CandidatePed{dSq, e};
+                                SyncedWorldPedEntry e{};
+                                e.active = 1;
+                                e.hostPoolSlot = static_cast<int16_t>(s);
+                                e.modelId = pModelId;
+                                e.x = px;
+                                e.y = py;
+                                e.z = pz;
+                                e.vx = *reinterpret_cast<float*>(pAddr + 0x68);
+                                e.vy = *reinterpret_cast<float*>(pAddr + 0x6c);
+                                e.vz = *reinterpret_cast<float*>(pAddr + 0x70);
+                                e.heading = *reinterpret_cast<float*>(pAddr + 0x6c4);
+                                int32_t ms = *reinterpret_cast<int32_t*>(pAddr + 0x550);
+                                e.moveState = static_cast<uint8_t>(std::clamp(ms, 1, 7));
+                                e.health = static_cast<uint8_t>(std::clamp(static_cast<int>(pHealth), 1, 200));
+
+                                if (foundCount < kMaxSyncedWorldPeds) {
+                                    best[foundCount++] = CandidatePed{dSq, e};
+                                } else {
+                                    int worstIdx = 0;
+                                    for (int w = 1; w < kMaxSyncedWorldPeds; ++w) {
+                                        if (best[w].distSq > best[worstIdx].distSq) worstIdx = w;
+                                    }
+                                    if (dSq < best[worstIdx].distSq) {
+                                        best[worstIdx] = CandidatePed{dSq, e};
+                                    }
                                 }
                             }
                         }
-                    }
 
-                    worldState_.numPeds = static_cast<uint8_t>(foundCount);
-                    for (int k = 0; k < kMaxSyncedWorldPeds; ++k) {
-                        if (k < foundCount) {
-                            worldState_.peds[k] = best[k].entry;
-                        } else {
-                            worldState_.peds[k].active = 0;
-                            worldState_.peds[k].hostPoolSlot = -1;
+                        worldState_.numPeds = static_cast<uint8_t>(foundCount);
+                        for (int k = 0; k < kMaxSyncedWorldPeds; ++k) {
+                            if (k < foundCount) {
+                                worldState_.peds[k] = best[k].entry;
+                            } else {
+                                worldState_.peds[k].active = 0;
+                                worldState_.peds[k].hostPoolSlot = -1;
+                            }
+                        }
+                    }
+                }
+
+                if (gtaSymbols_.cpoolsVehiclePool) {
+                    void* vPoolPtr = *reinterpret_cast<void**>(gtaSymbols_.cpoolsVehiclePool);
+                    if (vPoolPtr) {
+                        uintptr_t vPoolAddr = reinterpret_cast<uintptr_t>(vPoolPtr);
+                        uint8_t* vObjects = *reinterpret_cast<uint8_t**>(vPoolAddr + 0x00);
+                        uint8_t* vByteMap = *reinterpret_cast<uint8_t**>(vPoolAddr + 0x08);
+                        int32_t vPoolSize = *reinterpret_cast<int32_t*>(vPoolAddr + 0x10);
+
+                        struct CandidateVeh {
+                            float distSq;
+                            SyncedWorldVehicleEntry entry;
+                        };
+                        CandidateVeh bestVeh[kMaxSyncedWorldVehicles];
+                        int foundVehCount = 0;
+
+                        if (vObjects && vByteMap && vPoolSize > 0 && vPoolSize <= 256) {
+                            for (int32_t s = 0; s < vPoolSize; ++s) {
+                                if ((vByteMap[s] & 0x80) != 0) continue; // Slot libre
+                                void* pVeh = reinterpret_cast<void*>(vObjects + static_cast<size_t>(s) * 0xc68);
+                                uintptr_t vAddr = reinterpret_cast<uintptr_t>(pVeh);
+                                int16_t vModel = *reinterpret_cast<int16_t*>(vAddr + 0x22);
+                                if (vModel < 400 || vModel > 611) continue;
+
+                                uintptr_t vMat = *reinterpret_cast<uintptr_t*>(vAddr + 0x18);
+                                if (vMat == 0) continue;
+                                float vxPos = *reinterpret_cast<float*>(vMat + 0x30);
+                                float vyPos = *reinterpret_cast<float*>(vMat + 0x34);
+                                float vzPos = *reinterpret_cast<float*>(vMat + 0x38);
+                                if (!std::isfinite(vxPos) || !std::isfinite(vyPos) || !std::isfinite(vzPos)) continue;
+
+                                float dx = vxPos - me.x;
+                                float dy = vyPos - me.y;
+                                float dz = vzPos - me.z;
+                                float dSq = dx * dx + dy * dy + dz * dz;
+                                if (dSq > (130.0f * 130.0f)) continue;
+
+                                SyncedWorldVehicleEntry ve{};
+                                ve.active = 1;
+                                ve.hostPoolSlot = static_cast<int16_t>(s);
+                                ve.modelId = vModel;
+                                ve.x = vxPos;
+                                ve.y = vyPos;
+                                ve.z = vzPos;
+                                ve.rightX = *reinterpret_cast<float*>(vMat + 0x00);
+                                ve.rightY = *reinterpret_cast<float*>(vMat + 0x04);
+                                ve.rightZ = *reinterpret_cast<float*>(vMat + 0x08);
+                                ve.upX = *reinterpret_cast<float*>(vMat + 0x10);
+                                ve.upY = *reinterpret_cast<float*>(vMat + 0x14);
+                                ve.upZ = *reinterpret_cast<float*>(vMat + 0x18);
+                                ve.vx = *reinterpret_cast<float*>(vAddr + 0x68);
+                                ve.vy = *reinterpret_cast<float*>(vAddr + 0x6c);
+                                ve.vz = *reinterpret_cast<float*>(vAddr + 0x70);
+
+                                if (foundVehCount < kMaxSyncedWorldVehicles) {
+                                    bestVeh[foundVehCount++] = CandidateVeh{dSq, ve};
+                                } else {
+                                    int worstIdx = 0;
+                                    for (int w = 1; w < kMaxSyncedWorldVehicles; ++w) {
+                                        if (bestVeh[w].distSq > bestVeh[worstIdx].distSq) worstIdx = w;
+                                    }
+                                    if (dSq < bestVeh[worstIdx].distSq) {
+                                        bestVeh[worstIdx] = CandidateVeh{dSq, ve};
+                                    }
+                                }
+                            }
+                        }
+
+                        worldState_.numVehicles = static_cast<uint8_t>(foundVehCount);
+                        for (int v = 0; v < kMaxSyncedWorldVehicles; ++v) {
+                            if (v < foundVehCount) {
+                                worldState_.vehicles[v] = bestVeh[v].entry;
+                            } else {
+                                worldState_.vehicles[v].active = 0;
+                                worldState_.vehicles[v].hostPoolSlot = -1;
+                            }
                         }
                     }
                 }
@@ -909,14 +1150,17 @@ public:
             if (gtaSymbols_.oldWeatherType) *gtaSymbols_.oldWeatherType = worldState_.oldWeather;
             if (gtaSymbols_.newWeatherType) *gtaSymbols_.newWeatherType = worldState_.newWeather;
 
-            // Desactivar generación aleatoria local de policías/pandillas en el Guest y limpiar RANDOM_CHARs cada ~45 frames
+            // Desactivar toda generación aleatoria no sincronizada de peatones y autos en el Guest
             if (gtaSymbols_.dontCreateRandomCops) *gtaSymbols_.dontCreateRandomCops = 1;
             if (gtaSymbols_.dontCreateRandomGangMembers) *gtaSymbols_.dontCreateRandomGangMembers = 1;
-            if ((tickCount % 45 == 0) && gtaSymbols_.cpopulationRemoveAllRandomPedsFn) {
-                gtaSymbols_.cpopulationRemoveAllRandomPedsFn();
-            }
+            if (gtaSymbols_.pedDensityMultiplier) *gtaSymbols_.pedDensityMultiplier = 0.0f;
+            if (gtaSymbols_.maxNumberOfPedsInUse) *gtaSymbols_.maxNumberOfPedsInUse = 0;
+            if (gtaSymbols_.carDensityMultiplier) *gtaSymbols_.carDensityMultiplier = 0.0f;
+            if (gtaSymbols_.maxNumberOfCarsInUse) *gtaSymbols_.maxNumberOfCarsInUse = 0;
 
-            // Instanciar y actualizar en el Guest los peatones sincronizados desde el Host
+            bool requestedAnyModel = false;
+
+            // 1. Instanciar y actualizar en el Guest los peatones reales sincronizados desde el Host (NUNCA modelo 0 / CJ)
             for (int k = 0; k < kMaxSyncedWorldPeds; ++k) {
                 const SyncedWorldPedEntry& wp = worldState_.peds[k];
                 void* wPed = worldSyncPedPtr_[k];
@@ -925,50 +1169,71 @@ public:
                         wPed = nullptr;
                         worldSyncPedPtr_[k] = nullptr;
                         worldSyncPedHandle_[k] = -1;
+                        worldSyncPedModel_[k] = -1;
                     }
                 }
 
-                if (!wp.active) {
-                    if (wPed && gtaSymbols_.cpedTeleportFn) {
-                        // Ocultar bajo tierra hasta que el slot vuelva a usarse
-                        gtaSymbols_.cpedTeleportFn(wPed, CVector{me.x, me.y, -120.0f}, 0);
-                    }
-                    continue;
-                }
-
-                if (!wPed && gtaSymbols_.cpedOperatorNewFn && gtaSymbols_.ccivilianPedCtorFn && gtaSymbols_.cworldAddFn) {
-                    void* newWPed = gtaSymbols_.cpedOperatorNewFn(0x9c8);
-                    if (newWPed) {
-                        gtaSymbols_.ccivilianPedCtorFn(newWPed, 4 /*PED_TYPE_CIVMALE*/, 0 /*CJ model always loaded*/);
-                        uintptr_t wAddr = reinterpret_cast<uintptr_t>(newWPed);
-                        uintptr_t wIntel = *reinterpret_cast<uintptr_t*>(wAddr + 0x538);
-                        if (wIntel != 0 && gtaSymbols_.ctaskOperatorNewFn &&
-                            gtaSymbols_.ctaskSimpleStandStillCtorFn && gtaSymbols_.ctaskManagerSetTaskFn) {
-                            void* task = gtaSymbols_.ctaskOperatorNewFn(0x28);
-                            if (task) {
-                                gtaSymbols_.ctaskSimpleStandStillCtorFn(task, 999999, true, false, 8.0f);
-                                gtaSymbols_.ctaskManagerSetTaskFn(reinterpret_cast<void*>(wIntel + 8), task, 4, false);
-                            }
-                        }
+                bool validPedEntry = (wp.active != 0 && wp.modelId > 0 && wp.modelId <= 300);
+                if (!validPedEntry || (wPed && worldSyncPedModel_[k] != wp.modelId)) {
+                    if (wPed) {
+                        // Convertir en RANDOM_CHAR (1) y enviar bajo tierra para que RemoveAllRandomPeds lo elimine limpiamente
                         if (gtaSymbols_.cpedSetCharCreatedByFn) {
-                            gtaSymbols_.cpedSetCharCreatedByFn(newWPed, 2 /*MISSION_CHAR so RemoveAllRandomPeds preserves it*/);
+                            gtaSymbols_.cpedSetCharCreatedByFn(wPed, 1 /*RANDOM_CHAR*/);
                         }
-                        *reinterpret_cast<float*>(wAddr + 0x6ac) = 100.0f;
-                        *reinterpret_cast<float*>(wAddr + 0x6b0) = 100.0f;
-                        uintptr_t wMat = *reinterpret_cast<uintptr_t*>(wAddr + 0x18);
-                        if (wMat != 0) {
-                            *reinterpret_cast<float*>(wMat + 0x30) = wp.x;
-                            *reinterpret_cast<float*>(wMat + 0x34) = wp.y;
-                            *reinterpret_cast<float*>(wMat + 0x38) = wp.z;
+                        if (gtaSymbols_.cpedTeleportFn) {
+                            gtaSymbols_.cpedTeleportFn(wPed, CVector{me.x, me.y, -150.0f}, 0);
                         }
-                        *reinterpret_cast<float*>(wAddr + 0x08) = wp.x;
-                        *reinterpret_cast<float*>(wAddr + 0x0c) = wp.y;
-                        *reinterpret_cast<float*>(wAddr + 0x10) = wp.z;
-                        gtaSymbols_.cworldAddFn(newWPed);
-                        worldSyncPedPtr_[k] = newWPed;
-                        worldSyncPedHandle_[k] = gtaSymbols_.cpoolsGetPedRefFn ? gtaSymbols_.cpoolsGetPedRefFn(newWPed) : -1;
-                        worldSyncPedHostSlot_[k] = wp.hostPoolSlot;
-                        wPed = newWPed;
+                        wPed = nullptr;
+                        worldSyncPedPtr_[k] = nullptr;
+                        worldSyncPedHandle_[k] = -1;
+                        worldSyncPedModel_[k] = -1;
+                    }
+                    if (!validPedEntry) continue;
+                }
+
+                if (!wPed) {
+                    if (!gtaSymbols_.isModelLoaded(wp.modelId)) {
+                        if (gtaSymbols_.cstreamingRequestModelFn) {
+                            gtaSymbols_.cstreamingRequestModelFn(wp.modelId, 2);
+                            requestedAnyModel = true;
+                        }
+                        continue;
+                    }
+                    if (gtaSymbols_.cpedOperatorNewFn && gtaSymbols_.ccivilianPedCtorFn && gtaSymbols_.cworldAddFn) {
+                        void* newWPed = gtaSymbols_.cpedOperatorNewFn(0x9c8);
+                        if (newWPed) {
+                            gtaSymbols_.ccivilianPedCtorFn(newWPed, 4 /*PED_TYPE_CIVMALE*/, static_cast<uint32_t>(wp.modelId));
+                            uintptr_t wAddr = reinterpret_cast<uintptr_t>(newWPed);
+                            uintptr_t wIntel = *reinterpret_cast<uintptr_t*>(wAddr + 0x538);
+                            if (wIntel != 0 && gtaSymbols_.ctaskOperatorNewFn &&
+                                gtaSymbols_.ctaskSimpleStandStillCtorFn && gtaSymbols_.ctaskManagerSetTaskFn) {
+                                void* task = gtaSymbols_.ctaskOperatorNewFn(0x28);
+                                if (task) {
+                                    gtaSymbols_.ctaskSimpleStandStillCtorFn(task, 999999, true, false, 8.0f);
+                                    gtaSymbols_.ctaskManagerSetTaskFn(reinterpret_cast<void*>(wIntel + 8), task, 4, false);
+                                }
+                            }
+                            if (gtaSymbols_.cpedSetCharCreatedByFn) {
+                                gtaSymbols_.cpedSetCharCreatedByFn(newWPed, 2 /*MISSION_CHAR so RemoveAllRandomPeds preserves it*/);
+                            }
+                            *reinterpret_cast<float*>(wAddr + 0x6ac) = 100.0f;
+                            *reinterpret_cast<float*>(wAddr + 0x6b0) = 100.0f;
+                            uintptr_t wMat = *reinterpret_cast<uintptr_t*>(wAddr + 0x18);
+                            if (wMat != 0) {
+                                *reinterpret_cast<float*>(wMat + 0x30) = wp.x;
+                                *reinterpret_cast<float*>(wMat + 0x34) = wp.y;
+                                *reinterpret_cast<float*>(wMat + 0x38) = wp.z;
+                            }
+                            *reinterpret_cast<float*>(wAddr + 0x08) = wp.x;
+                            *reinterpret_cast<float*>(wAddr + 0x0c) = wp.y;
+                            *reinterpret_cast<float*>(wAddr + 0x10) = wp.z;
+                            gtaSymbols_.cworldAddFn(newWPed);
+                            worldSyncPedPtr_[k] = newWPed;
+                            worldSyncPedHandle_[k] = gtaSymbols_.cpoolsGetPedRefFn ? gtaSymbols_.cpoolsGetPedRefFn(newWPed) : -1;
+                            worldSyncPedHostSlot_[k] = wp.hostPoolSlot;
+                            worldSyncPedModel_[k] = wp.modelId;
+                            wPed = newWPed;
+                        }
                     }
                 }
 
@@ -981,6 +1246,76 @@ public:
                         wPed, wp.x, wp.y, wp.z,
                         wp.vx, wp.vy, wp.vz, wp.heading,
                         static_cast<int>(wp.moveState), static_cast<float>(wp.health)
+                    );
+                }
+            }
+
+            // 2. Instanciar y actualizar en el Guest los vehículos sincronizados desde el Host
+            for (int v = 0; v < kMaxSyncedWorldVehicles; ++v) {
+                const SyncedWorldVehicleEntry& ve = worldState_.vehicles[v];
+                void* wVeh = worldSyncVehPtr_[v];
+                if (wVeh && gtaSymbols_.cpoolsGetVehicleFn && worldSyncVehHandle_[v] > 0) {
+                    if (gtaSymbols_.cpoolsGetVehicleFn(worldSyncVehHandle_[v]) != wVeh) {
+                        wVeh = nullptr;
+                        worldSyncVehPtr_[v] = nullptr;
+                        worldSyncVehHandle_[v] = -1;
+                        worldSyncVehModel_[v] = -1;
+                    }
+                }
+
+                bool validVehEntry = (ve.active != 0 && ve.modelId >= 400 && ve.modelId <= 611);
+                if (!validVehEntry || (wVeh && worldSyncVehModel_[v] != ve.modelId && wVeh != myVeh)) {
+                    if (wVeh && wVeh != myVeh) {
+                        // Marcar como RANDOM_VEHICLE (1) en +0x610 para que ClearCarsFromArea lo elimine limpiamente
+                        *reinterpret_cast<uint8_t*>(reinterpret_cast<uintptr_t>(wVeh) + 0x610) = 1;
+                        wVeh = nullptr;
+                        worldSyncVehPtr_[v] = nullptr;
+                        worldSyncVehHandle_[v] = -1;
+                        worldSyncVehModel_[v] = -1;
+                    }
+                    if (!validVehEntry) continue;
+                }
+
+                if (!wVeh) {
+                    if (!gtaSymbols_.isModelLoaded(ve.modelId)) {
+                        if (gtaSymbols_.cstreamingRequestModelFn) {
+                            gtaSymbols_.cstreamingRequestModelFn(ve.modelId, 2);
+                            requestedAnyModel = true;
+                        }
+                        continue;
+                    }
+                    if (gtaSymbols_.ccarCtrlCreateCarForScriptFn) {
+                        void* newVeh = gtaSymbols_.ccarCtrlCreateCarForScriptFn(ve.modelId, CVector{ve.x, ve.y, ve.z}, 0);
+                        if (newVeh) {
+                            // Marcar m_nVehicleCreatedBy (+0x610) = 2 (MISSION_VEHICLE) para que ClearCarsFromArea lo preserve
+                            *reinterpret_cast<uint8_t*>(reinterpret_cast<uintptr_t>(newVeh) + 0x610) = 2;
+                            worldSyncVehPtr_[v] = newVeh;
+                            worldSyncVehHandle_[v] = gtaSymbols_.cpoolsGetVehicleRefFn ? gtaSymbols_.cpoolsGetVehicleRefFn(newVeh) : -1;
+                            worldSyncVehHostSlot_[v] = ve.hostPoolSlot;
+                            worldSyncVehModel_[v] = ve.modelId;
+                            wVeh = newVeh;
+                        }
+                    }
+                }
+
+                if (wVeh && wVeh != myVeh) {
+                    applySmoothVehicleTransform(wVeh, ve);
+                }
+            }
+
+            if (requestedAnyModel && (tickCount % 5 == 0) && gtaSymbols_.cstreamingLoadAllRequestedModelsFn) {
+                gtaSymbols_.cstreamingLoadAllRequestedModelsFn(false);
+            }
+
+            // Limpiar cada 15 frames cualquier peatón o vehículo aleatorio local no sincronizado en el Guest
+            if (tickCount % 15 == 0) {
+                if (gtaSymbols_.cpopulationRemoveAllRandomPedsFn) {
+                    gtaSymbols_.cpopulationRemoveAllRandomPedsFn();
+                }
+                if (gtaSymbols_.cworldClearCarsFromAreaFn) {
+                    gtaSymbols_.cworldClearCarsFromAreaFn(
+                        me.x - 300.0f, me.y - 300.0f, -100.0f,
+                        me.x + 300.0f, me.y + 300.0f, 500.0f
                     );
                 }
             }
@@ -1378,8 +1713,12 @@ public:
         pkt.oldWeather = worldState_.oldWeather;
         pkt.newWeather = worldState_.newWeather;
         pkt.numPeds = worldState_.numPeds;
+        pkt.numVehicles = worldState_.numVehicles;
         for (int k = 0; k < kMaxSyncedWorldPeds; ++k) {
             pkt.peds[k] = worldState_.peds[k];
+        }
+        for (int v = 0; v < kMaxSyncedWorldVehicles; ++v) {
+            pkt.vehicles[v] = worldState_.vehicles[v];
         }
         return pkt;
     }
@@ -1525,8 +1864,12 @@ public:
                 worldState_.oldWeather = ws->oldWeather;
                 worldState_.newWeather = ws->newWeather;
                 worldState_.numPeds = std::min<uint8_t>(ws->numPeds, kMaxSyncedWorldPeds);
+                worldState_.numVehicles = std::min<uint8_t>(ws->numVehicles, kMaxSyncedWorldVehicles);
                 for (int k = 0; k < kMaxSyncedWorldPeds; ++k) {
                     worldState_.peds[k] = ws->peds[k];
+                }
+                for (int v = 0; v < kMaxSyncedWorldVehicles; ++v) {
+                    worldState_.vehicles[v] = ws->vehicles[v];
                 }
                 packetsProcessed_.fetch_add(1);
                 return true;
@@ -1806,9 +2149,9 @@ public:
         char buf[960];
         std::snprintf(
             buf, sizeof(buf),
-            "libCoopAndreasBridge.so v2.4 (Tornamic Port) | Role=%s (Slot %d) | Room=%s | UDP=%d/%d | "
+            "libCoopAndreasBridge.so v2.5 (Tornamic Port) | Role=%s (Slot %d) | Room=%s | UDP=%d/%d | "
             "Players=%d/%d | Cam=%s | GOTHook=%s (Ticks=%lld) | LocalCJ=(%.1f,%.1f,%.1f anim=%u) | "
-            "RemoteP%d=(%.1f,%.1f,%.1f ped=%p anim=%u) | Clock=%02u:%02u Weather=%d/%d WorldPeds=%u | "
+            "RemoteP%d=(%.1f,%.1f,%.1f ped=%p anim=%u) | Clock=%02u:%02u Weather=%d/%d WorldPeds=%u WorldVehs=%u | "
             "$ONMISSION=%d (%s CP#%d) | Opcodes=%lld | Packets=%lld",
             config_.isHost ? "HOST" : "GUEST",
             config_.localPlayerSlot,
@@ -1822,7 +2165,7 @@ public:
             remoteIdx + 1, players_[remoteIdx].x, players_[remoteIdx].y, players_[remoteIdx].z,
             remotePedPtr_[remoteIdx], players_[remoteIdx].animId,
             worldState_.clockHours, worldState_.clockMinutes,
-            worldState_.oldWeather, worldState_.newWeather, worldState_.numPeds,
+            worldState_.oldWeather, worldState_.newWeather, worldState_.numPeds, worldState_.numVehicles,
             mission_.onMissionFlag,
             mission_.missionId,
             mission_.checkpointIndex,
@@ -2039,6 +2382,12 @@ private:
     void* worldSyncPedPtr_[kMaxSyncedWorldPeds] = {nullptr};
     int worldSyncPedHandle_[kMaxSyncedWorldPeds] = {-1, -1, -1, -1, -1, -1};
     int16_t worldSyncPedHostSlot_[kMaxSyncedWorldPeds] = {-1, -1, -1, -1, -1, -1};
+    int16_t worldSyncPedModel_[kMaxSyncedWorldPeds] = {-1, -1, -1, -1, -1, -1};
+
+    void* worldSyncVehPtr_[kMaxSyncedWorldVehicles] = {nullptr};
+    int worldSyncVehHandle_[kMaxSyncedWorldVehicles] = {-1, -1, -1, -1, -1};
+    int16_t worldSyncVehHostSlot_[kMaxSyncedWorldVehicles] = {-1, -1, -1, -1, -1};
+    int16_t worldSyncVehModel_[kMaxSyncedWorldVehicles] = {-1, -1, -1, -1, -1};
 
 #if defined(__unix__) || defined(__ANDROID__) || defined(__linux__)
     std::vector<PeerEndpoint> activePeers_;
