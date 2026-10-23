@@ -682,8 +682,32 @@ public:
         if (!ped) return;
         uintptr_t pedAddr = reinterpret_cast<uintptr_t>(ped);
 
-        // Mantener vivo al actor (+0x6ac = m_fHealth en arm64)
+        // Mantener vivo y de pie al actor (+0x6ac = m_fHealth, +0x54c = m_nPedState, +0x584 bit 0 = bIsStanding)
         *reinterpret_cast<float*>(pedAddr + 0x6ac) = std::max(health, 100.0f);
+        if (*reinterpret_cast<int32_t*>(pedAddr + 0x54c) != 1) {
+            *reinterpret_cast<int32_t*>(pedAddr + 0x54c) = 1; // PEDSTATE_IDLE
+        }
+        *reinterpret_cast<uint8_t*>(pedAddr + 0x584) |= 0x01; // bIsStanding = true
+
+        // Limpiar cualquier tarea primaria de caída/colisión/daño (slots 0..3 en m_pIntelligence->m_TaskMgr)
+        // que tumbe al actor en el suelo, y garantizar que CTaskSimpleStandStill siga en el slot 4
+        uintptr_t pedIntel = *reinterpret_cast<uintptr_t*>(pedAddr + 0x538);
+        if (pedIntel != 0 && gtaSymbols_.ctaskManagerSetTaskFn) {
+            for (int slot = 0; slot < 4; ++slot) {
+                void* activeOverrideTask = *reinterpret_cast<void**>(pedIntel + 0x08 + static_cast<size_t>(slot) * 8);
+                if (activeOverrideTask != nullptr) {
+                    gtaSymbols_.ctaskManagerSetTaskFn(reinterpret_cast<void*>(pedIntel + 8), nullptr, slot, false);
+                }
+            }
+            void* defaultTask = *reinterpret_cast<void**>(pedIntel + 0x28);
+            if (defaultTask == nullptr && gtaSymbols_.ctaskOperatorNewFn && gtaSymbols_.ctaskSimpleStandStillCtorFn) {
+                void* task = gtaSymbols_.ctaskOperatorNewFn(0x28);
+                if (task) {
+                    gtaSymbols_.ctaskSimpleStandStillCtorFn(task, 999999, true, false, 8.0f);
+                    gtaSymbols_.ctaskManagerSetTaskFn(reinterpret_cast<void*>(pedIntel + 8), task, 4, false);
+                }
+            }
+        }
 
         uintptr_t mat = *reinterpret_cast<uintptr_t*>(pedAddr + 0x18);
         float curX = targetX, curY = targetY, curZ = targetZ;
@@ -708,14 +732,12 @@ public:
             else effectiveMoveState = 1;                      // PEDMOVE_STILL
         }
 
-        if (distSq > 25.0f && gtaSymbols_.cpedTeleportFn) {
-            // Salto grande (> 5m): usar CPed::Teleport nativo
-            gtaSymbols_.cpedTeleportFn(ped, CVector{targetX, targetY, targetZ}, 0);
-        } else if (mat != 0 && gtaSymbols_.cworldRemoveFn && gtaSymbols_.cworldAddFn) {
-            // Movimiento continuo suave sin resetear tareas ni poner a cero m_vecMoveSpeed
-            float nextX = curX + dx * 0.60f;
-            float nextY = curY + dy * 0.60f;
-            float nextZ = curZ + dz * 0.60f;
+        if (mat != 0 && gtaSymbols_.cworldRemoveFn && gtaSymbols_.cworldAddFn) {
+            // Actualizar matriz y posición directamente sin invocar CPed::Teleport
+            // (ya que CPed::Teleport llama a CPedIntelligence::FlushImmediately y apaga bIsStanding)
+            float nextX = (distSq > 25.0f) ? targetX : (curX + dx * 0.65f);
+            float nextY = (distSq > 25.0f) ? targetY : (curY + dy * 0.65f);
+            float nextZ = (distSq > 25.0f) ? targetZ : (curZ + dz * 0.65f);
 
             gtaSymbols_.cworldRemoveFn(ped);
 
@@ -743,6 +765,7 @@ public:
             *reinterpret_cast<float*>(pedAddr + 0x68) = vx;
             *reinterpret_cast<float*>(pedAddr + 0x6c) = vy;
             *reinterpret_cast<float*>(pedAddr + 0x70) = vz;
+            *reinterpret_cast<uint8_t*>(pedAddr + 0x584) |= 0x01; // bIsStanding = true
 
             if (gtaSymbols_.centityUpdateRwFrameFn) {
                 gtaSymbols_.centityUpdateRwFrameFn(ped);
@@ -954,7 +977,8 @@ public:
         me.armor = std::isfinite(rawArmor) ? std::clamp(static_cast<int>(rawArmor), 0, 200) : 0;
         me.animId = static_cast<uint16_t>(std::clamp(localMoveState, 0, 12));
         me.vehicleNetId = myVeh ? 101 : 0;
-        me.vehicleModelId = myVeh ? static_cast<int32_t>(*reinterpret_cast<int16_t*>(reinterpret_cast<uintptr_t>(myVeh) + 0x22)) : 492;
+        // En libGTASA.so arm64 v2.10, CEntity::m_nModelIndex (int16_t) está en +0x32 (verificado en CEntity::SetModelIndexNoCreate 0x4ca7e0)
+        me.vehicleModelId = myVeh ? static_cast<int32_t>(*reinterpret_cast<int16_t*>(reinterpret_cast<uintptr_t>(myVeh) + 0x32)) : 492;
         me.seatIndex = myVeh ? 0 : -1;
         me.cameraMode = 0; // Cámara 3D Independiente
 
@@ -1001,9 +1025,9 @@ public:
                                 if (isRemotePlayerPed) continue;
 
                                 uintptr_t pAddr = reinterpret_cast<uintptr_t>(pPed);
-                                // Excluir peatones dentro de vehículos y excluir modelo 0 (CJ)
+                                // Excluir peatones dentro de vehículos y excluir modelo 0 (CJ); +0x32 = CEntity::m_nModelIndex en arm64
                                 if ((*reinterpret_cast<uint8_t*>(pAddr + 0x585) & 1) != 0) continue;
-                                int16_t pModelId = *reinterpret_cast<int16_t*>(pAddr + 0x22);
+                                int16_t pModelId = *reinterpret_cast<int16_t*>(pAddr + 0x32);
                                 if (pModelId <= 0 || pModelId > 300) continue;
 
                                 float pHealth = *reinterpret_cast<float*>(pAddr + 0x6ac);
@@ -1083,7 +1107,8 @@ public:
                                 if ((vByteMap[s] & 0x80) != 0) continue; // Slot libre
                                 void* pVeh = reinterpret_cast<void*>(vObjects + static_cast<size_t>(s) * 0xc68);
                                 uintptr_t vAddr = reinterpret_cast<uintptr_t>(pVeh);
-                                int16_t vModel = *reinterpret_cast<int16_t*>(vAddr + 0x22);
+                                // +0x32 = CEntity::m_nModelIndex en arm64 v2.10
+                                int16_t vModel = *reinterpret_cast<int16_t*>(vAddr + 0x32);
                                 if (vModel < 400 || vModel > 611) continue;
 
                                 uintptr_t vMat = *reinterpret_cast<uintptr_t*>(vAddr + 0x18);
@@ -1238,10 +1263,7 @@ public:
                 }
 
                 if (wPed) {
-                    if (worldSyncPedHostSlot_[k] != wp.hostPoolSlot && gtaSymbols_.cpedTeleportFn) {
-                        gtaSymbols_.cpedTeleportFn(wPed, CVector{wp.x, wp.y, wp.z}, 0);
-                        worldSyncPedHostSlot_[k] = wp.hostPoolSlot;
-                    }
+                    worldSyncPedHostSlot_[k] = wp.hostPoolSlot;
                     applySmoothPedTransformAndAnim(
                         wPed, wp.x, wp.y, wp.z,
                         wp.vx, wp.vy, wp.vz, wp.heading,
@@ -1321,6 +1343,9 @@ public:
             }
         }
 
+        // Esperar a que termine la cinemática inicial antes de spawnear actores remotos
+        if (tickCount < 220) return;
+
         // Procesar e instanciar jugadores remotos en el mundo 3D de GTA San Andreas
         for (int i = 0; i < kMaxCoopPlayers; ++i) {
             if (i == localIdx) continue;
@@ -1328,15 +1353,17 @@ public:
             bool peerRecentlyActive = (rem.lastNetworkUpdateMs > 0 && (nowMs - rem.lastNetworkUpdateMs) < 20000);
             if (!peerRecentlyActive || !rem.hasRealGtaCoords) continue;
 
-            // Si somos Guest (o al conectar por primera vez) y estamos lejos del compañero (> 45m),
-            // teletransportar automáticamente a CJ junto al compañero para que se vean cara a cara de inmediato
+            // Si somos Guest (o al conectar por primera vez):
+            // - Si estamos lejos del Host (> 45m), teletransportar a Guest junto al Host
+            // - Si ambos spawnearon exactamente en el mismo punto (< 1.5m), separar a Guest +1.8m en X
+            //   para que ambos estén de pie lado a lado y nunca colisionen entre sí
             if (!initialSyncTeleportDone_ && gtaSymbols_.cpedTeleportFn) {
                 float dx = rem.x - me.x;
                 float dy = rem.y - me.y;
                 float dz = rem.z - me.z;
                 float distSq = dx * dx + dy * dy + dz * dz;
                 if (!config_.isHost && distSq > (45.0f * 45.0f) && std::fabs(rem.x) > 1.0f) {
-                    CVector meetPos{rem.x + 2.0f, rem.y + 1.5f, rem.z + 0.25f};
+                    CVector meetPos{rem.x + 1.8f, rem.y + 0.6f, rem.z + 0.15f};
                     gtaSymbols_.cpedTeleportFn(localPed, meetPos, 0);
                     me.x = meetPos.x;
                     me.y = meetPos.y;
@@ -1344,8 +1371,36 @@ public:
                     initialSyncTeleportDone_ = true;
                     LOGI("Auto-teleported Guest CJ to Host location (%.1f, %.1f, %.1f) for immediate Co-op visibility!",
                          meetPos.x, meetPos.y, meetPos.z);
+                } else if (!config_.isHost && distSq < (1.5f * 1.5f) && std::fabs(rem.x) > 1.0f) {
+                    CVector sideBySidePos{rem.x + 1.8f, rem.y + 0.6f, rem.z};
+                    gtaSymbols_.cpedTeleportFn(localPed, sideBySidePos, 0);
+                    me.x = sideBySidePos.x;
+                    me.y = sideBySidePos.y;
+                    me.z = sideBySidePos.z;
+                    initialSyncTeleportDone_ = true;
+                    LOGI("Separated Guest CJ side-by-side at (%.1f, %.1f, %.1f) to prevent spawn collision!",
+                         sideBySidePos.x, sideBySidePos.y, sideBySidePos.z);
                 } else if (distSq <= (45.0f * 45.0f)) {
                     initialSyncTeleportDone_ = true;
+                }
+            }
+
+            // Calcular posición objetivo del actor remoto garantizando separación mínima de 1.45m respecto al jugador local
+            // para que la física de GTA SA nunca tumbe a ninguno de los dos al piso por superposición de cápsulas
+            float targetRemX = rem.x;
+            float targetRemY = rem.y;
+            float targetRemZ = rem.z;
+            float sepDx = targetRemX - me.x;
+            float sepDy = targetRemY - me.y;
+            float sepDist2d = std::sqrt(sepDx * sepDx + sepDy * sepDy);
+            if (sepDist2d < 1.45f) {
+                if (sepDist2d > 0.05f) {
+                    float scale = 1.45f / sepDist2d;
+                    targetRemX = me.x + sepDx * scale;
+                    targetRemY = me.y + sepDy * scale;
+                } else {
+                    targetRemX = me.x + (config_.isHost ? 1.6f : -1.6f);
+                    targetRemY = me.y + (config_.isHost ? 0.5f : -0.5f);
                 }
             }
 
@@ -1388,13 +1443,13 @@ public:
 
                     uintptr_t newMat = *reinterpret_cast<uintptr_t*>(newPedAddr + 0x18);
                     if (newMat != 0) {
-                        *reinterpret_cast<float*>(newMat + 0x30) = rem.x;
-                        *reinterpret_cast<float*>(newMat + 0x34) = rem.y;
-                        *reinterpret_cast<float*>(newMat + 0x38) = rem.z;
+                        *reinterpret_cast<float*>(newMat + 0x30) = targetRemX;
+                        *reinterpret_cast<float*>(newMat + 0x34) = targetRemY;
+                        *reinterpret_cast<float*>(newMat + 0x38) = targetRemZ;
                     }
-                    *reinterpret_cast<float*>(newPedAddr + 0x08) = rem.x;
-                    *reinterpret_cast<float*>(newPedAddr + 0x0c) = rem.y;
-                    *reinterpret_cast<float*>(newPedAddr + 0x10) = rem.z;
+                    *reinterpret_cast<float*>(newPedAddr + 0x08) = targetRemX;
+                    *reinterpret_cast<float*>(newPedAddr + 0x0c) = targetRemY;
+                    *reinterpret_cast<float*>(newPedAddr + 0x10) = targetRemZ;
 
                     // Agregar al mundo 3D igual que CREATE_CHAR (0x3f6238: bl CWorld::Add)
                     gtaSymbols_.cworldAddFn(newPed);
@@ -1412,13 +1467,13 @@ public:
 
                     ped = newPed;
                     LOGI("Spawned 3D Remote Player P%d (ped=%p, handle=%d, model=%u) at (%.2f, %.2f, %.2f)",
-                         i + 1, newPed, handle, spawnModel, rem.x, rem.y, rem.z);
+                         i + 1, newPed, handle, spawnModel, targetRemX, targetRemY, targetRemZ);
                 }
             }
 
             if (ped) {
                 applySmoothPedTransformAndAnim(
-                    ped, rem.x, rem.y, rem.z,
+                    ped, targetRemX, targetRemY, targetRemZ,
                     rem.vx, rem.vy, rem.vz, rem.heading,
                     static_cast<int>(rem.animId), 200.0f
                 );
@@ -2149,7 +2204,7 @@ public:
         char buf[960];
         std::snprintf(
             buf, sizeof(buf),
-            "libCoopAndreasBridge.so v2.5 (Tornamic Port) | Role=%s (Slot %d) | Room=%s | UDP=%d/%d | "
+            "libCoopAndreasBridge.so v2.6 (Tornamic Port) | Role=%s (Slot %d) | Room=%s | UDP=%d/%d | "
             "Players=%d/%d | Cam=%s | GOTHook=%s (Ticks=%lld) | LocalCJ=(%.1f,%.1f,%.1f anim=%u) | "
             "RemoteP%d=(%.1f,%.1f,%.1f ped=%p anim=%u) | Clock=%02u:%02u Weather=%d/%d WorldPeds=%u WorldVehs=%u | "
             "$ONMISSION=%d (%s CP#%d) | Opcodes=%lld | Packets=%lld",
