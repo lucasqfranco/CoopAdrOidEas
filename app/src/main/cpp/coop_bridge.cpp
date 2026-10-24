@@ -328,6 +328,7 @@ struct GtaSaNativeSymbols {
     using FnCPoolsGetVehicleRef = int (*)(void* veh);
     using FnCPoolsGetVehicle = void* (*)(int handle);
     using FnCWorldClearCarsFromArea = void (*)(float x1, float y1, float z1, float x2, float y2, float z2);
+    using FnCCutsceneMgrSkipCutscene = void (*)();
 
     FnCTaskOperatorNew ctaskOperatorNewFn = nullptr;
     FnCTaskSimpleStandStillCtor ctaskSimpleStandStillCtorFn = nullptr;
@@ -340,7 +341,9 @@ struct GtaSaNativeSymbols {
     FnCPoolsGetVehicleRef cpoolsGetVehicleRefFn = nullptr;
     FnCPoolsGetVehicle cpoolsGetVehicleFn = nullptr;
     FnCWorldClearCarsFromArea cworldClearCarsFromAreaFn = nullptr;
+    FnCCutsceneMgrSkipCutscene ccutsceneMgrSkipCutsceneFn = nullptr;
 
+    uint8_t* cutsceneRunning = nullptr;             // _ZN12CCutsceneMgr10ms_runningE
     uint8_t* bPlayersCanBeInSeparateCars = nullptr; // _ZN10CGameLogic27bPlayersCanBeInSeparateCarsE
     uint8_t* clockHours = nullptr;                  // _ZN6CClock18ms_nGameClockHoursE
     uint8_t* clockMinutes = nullptr;                // _ZN6CClock20ms_nGameClockMinutesE
@@ -427,6 +430,8 @@ struct GtaSaNativeSymbols {
         cpoolsGetVehicleRefFn = reinterpret_cast<FnCPoolsGetVehicleRef>(dlsym(libHandle, "_ZN6CPools13GetVehicleRefEP8CVehicle"));
         cpoolsGetVehicleFn = reinterpret_cast<FnCPoolsGetVehicle>(dlsym(libHandle, "_ZN6CPools10GetVehicleEi"));
         cworldClearCarsFromAreaFn = reinterpret_cast<FnCWorldClearCarsFromArea>(dlsym(libHandle, "_ZN6CWorld17ClearCarsFromAreaEffffff"));
+        ccutsceneMgrSkipCutsceneFn = reinterpret_cast<FnCCutsceneMgrSkipCutscene>(dlsym(libHandle, "_ZN12CCutsceneMgr12SkipCutsceneEv"));
+        cutsceneRunning = reinterpret_cast<uint8_t*>(dlsym(libHandle, "_ZN12CCutsceneMgr10ms_runningE"));
 
         bPlayersCanBeInSeparateCars = reinterpret_cast<uint8_t*>(dlsym(libHandle, "_ZN10CGameLogic27bPlayersCanBeInSeparateCarsE"));
         clockHours = reinterpret_cast<uint8_t*>(dlsym(libHandle, "_ZN6CClock18ms_nGameClockHoursE"));
@@ -859,6 +864,21 @@ public:
     void onMainGameThreadTick() {
 #if defined(__unix__) || defined(__ANDROID__) || defined(__linux__)
         int64_t tickCount = mainThreadTicks_.fetch_add(1) + 1;
+
+        // Auto-saltar cualquier cinemática activa (ej. intro del aeropuerto / Grove Street)
+        // para entrar directo a gameplay cooperativo sin necesidad de tocar la pantalla manualmente
+        if (gtaSymbols_.cutsceneRunning && *gtaSymbols_.cutsceneRunning != 0) {
+            int64_t csTicks = ++cutsceneActiveTicks_;
+            if (csTicks == 25 && gtaSymbols_.ccutsceneMgrSkipCutsceneFn) {
+                gtaSymbols_.ccutsceneMgrSkipCutsceneFn();
+                LOGI("Auto-skipped active cutscene via CCutsceneMgr::SkipCutscene() at tick=%lld",
+                     static_cast<long long>(tickCount));
+            }
+            return;
+        } else {
+            cutsceneActiveTicks_ = 0;
+        }
+
         if (!gtaSymbols_.findPlayerPedFn || !gtaSymbols_.findPlayerCoorsFn) return;
 
         void* localPed = gtaSymbols_.findPlayerPedFn(-1);
@@ -888,6 +908,7 @@ public:
             // Se acaba de cargar una partida o reiniciar misión
             lastLocalPedPtr_ = localPed;
             initialSyncTeleportDone_ = false;
+            initialAlleyFreeRoamDone_ = false;
             for (int i = 0; i < kMaxCoopPlayers; ++i) {
                 remotePedPtr_[i] = nullptr;
                 remotePedHandle_[i] = -1;
@@ -986,6 +1007,22 @@ public:
         // SINCRONIZACIÓN DE RELOJ (HORA), CLIMA, PEATONES Y VEHÍCULOS DEL MUNDO (HOST <-> GUEST)
         // ====================================================================
         if (config_.isHost) {
+            // Al salir de la cinemática inicial en el callejón (970.9, -1108.1), activar modo Free Roam
+            // ($ONMISSION = 0) y densidad máxima de peatones/vehículos para que el mundo esté vivo de inmediato
+            if (!initialAlleyFreeRoamDone_ && std::fabs(me.x - 970.9f) < 6.0f && std::fabs(me.y - (-1108.1f)) < 6.0f) {
+                if (gtaSymbols_.onAMissionFlagOffset) {
+                    *gtaSymbols_.onAMissionFlagOffset = 0;
+                }
+                onMission = false;
+                initialAlleyFreeRoamDone_ = true;
+            }
+            if (gtaSymbols_.dontCreateRandomCops) *gtaSymbols_.dontCreateRandomCops = 0;
+            if (gtaSymbols_.dontCreateRandomGangMembers) *gtaSymbols_.dontCreateRandomGangMembers = 0;
+            if (gtaSymbols_.pedDensityMultiplier) *gtaSymbols_.pedDensityMultiplier = 2.0f;
+            if (gtaSymbols_.maxNumberOfPedsInUse) *gtaSymbols_.maxNumberOfPedsInUse = 28;
+            if (gtaSymbols_.carDensityMultiplier) *gtaSymbols_.carDensityMultiplier = 2.0f;
+            if (gtaSymbols_.maxNumberOfCarsInUse) *gtaSymbols_.maxNumberOfCarsInUse = 16;
+
             mission_.onMissionFlag = onMission ? 1 : 0;
             if (gtaSymbols_.clockHours) worldState_.clockHours = *gtaSymbols_.clockHours;
             if (gtaSymbols_.clockMinutes) worldState_.clockMinutes = *gtaSymbols_.clockMinutes;
@@ -1343,8 +1380,8 @@ public:
             }
         }
 
-        // Esperar a que termine la cinemática inicial antes de spawnear actores remotos
-        if (tickCount < 220) return;
+        // Esperar unos ticks tras salir de cualquier cinemática antes de spawnear actores remotos
+        if (tickCount < 80) return;
 
         // Procesar e instanciar jugadores remotos en el mundo 3D de GTA San Andreas
         for (int i = 0; i < kMaxCoopPlayers; ++i) {
@@ -1354,16 +1391,16 @@ public:
             if (!peerRecentlyActive || !rem.hasRealGtaCoords) continue;
 
             // Si somos Guest (o al conectar por primera vez):
-            // - Si estamos lejos del Host (> 45m), teletransportar a Guest junto al Host
-            // - Si ambos spawnearon exactamente en el mismo punto (< 1.5m), separar a Guest +1.8m en X
-            //   para que ambos estén de pie lado a lado y nunca colisionen entre sí
+            // - Si estamos lejos del Host (> 45m), teletransportar a Guest junto al Host (+1.85m en Y = a la izquierda en espacio abierto)
+            // - Si ambos spawnearon exactamente en el mismo punto (< 1.5m), separar a Guest +1.85m en Y (misma X)
+            //   para que ambos estén de pie lado a lado frente a la cámara y nunca dentro de la pared (+X) ni colisionando
             if (!initialSyncTeleportDone_ && gtaSymbols_.cpedTeleportFn) {
                 float dx = rem.x - me.x;
                 float dy = rem.y - me.y;
                 float dz = rem.z - me.z;
                 float distSq = dx * dx + dy * dy + dz * dz;
                 if (!config_.isHost && distSq > (45.0f * 45.0f) && std::fabs(rem.x) > 1.0f) {
-                    CVector meetPos{rem.x + 1.8f, rem.y + 0.6f, rem.z + 0.15f};
+                    CVector meetPos{rem.x, rem.y + 1.85f, rem.z + 0.15f};
                     gtaSymbols_.cpedTeleportFn(localPed, meetPos, 0);
                     me.x = meetPos.x;
                     me.y = meetPos.y;
@@ -1372,7 +1409,7 @@ public:
                     LOGI("Auto-teleported Guest CJ to Host location (%.1f, %.1f, %.1f) for immediate Co-op visibility!",
                          meetPos.x, meetPos.y, meetPos.z);
                 } else if (!config_.isHost && distSq < (1.5f * 1.5f) && std::fabs(rem.x) > 1.0f) {
-                    CVector sideBySidePos{rem.x + 1.8f, rem.y + 0.6f, rem.z};
+                    CVector sideBySidePos{rem.x, rem.y + 1.85f, rem.z};
                     gtaSymbols_.cpedTeleportFn(localPed, sideBySidePos, 0);
                     me.x = sideBySidePos.x;
                     me.y = sideBySidePos.y;
@@ -1386,7 +1423,7 @@ public:
             }
 
             // Calcular posición objetivo del actor remoto garantizando separación mínima de 1.45m respecto al jugador local
-            // para que la física de GTA SA nunca tumbe a ninguno de los dos al piso por superposición de cápsulas
+            // en el eje Y (izquierda/derecha en pantalla), nunca hacia +X (pared frontal del callejón)
             float targetRemX = rem.x;
             float targetRemY = rem.y;
             float targetRemZ = rem.z;
@@ -1399,8 +1436,8 @@ public:
                     targetRemX = me.x + sepDx * scale;
                     targetRemY = me.y + sepDy * scale;
                 } else {
-                    targetRemX = me.x + (config_.isHost ? 1.6f : -1.6f);
-                    targetRemY = me.y + (config_.isHost ? 0.5f : -0.5f);
+                    targetRemX = me.x;
+                    targetRemY = me.y + (config_.isHost ? 1.85f : -1.85f);
                 }
             }
 
@@ -2204,7 +2241,7 @@ public:
         char buf[960];
         std::snprintf(
             buf, sizeof(buf),
-            "libCoopAndreasBridge.so v2.6 (Tornamic Port) | Role=%s (Slot %d) | Room=%s | UDP=%d/%d | "
+            "libCoopAndreasBridge.so v2.7 (Tornamic Port) | Role=%s (Slot %d) | Room=%s | UDP=%d/%d | "
             "Players=%d/%d | Cam=%s | GOTHook=%s (Ticks=%lld) | LocalCJ=(%.1f,%.1f,%.1f anim=%u) | "
             "RemoteP%d=(%.1f,%.1f,%.1f ped=%p anim=%u) | Clock=%02u:%02u Weather=%d/%d WorldPeds=%u WorldVehs=%u | "
             "$ONMISSION=%d (%s CP#%d) | Opcodes=%lld | Packets=%lld",
@@ -2429,6 +2466,8 @@ private:
 
     void* lastLocalPedPtr_ = nullptr;
     bool initialSyncTeleportDone_ = false;
+    bool initialAlleyFreeRoamDone_ = false;
+    int64_t cutsceneActiveTicks_ = 0;
     void* remotePedPtr_[kMaxCoopPlayers] = {nullptr};
     int remotePedHandle_[kMaxCoopPlayers] = {-1, -1, -1, -1, -1, -1, -1, -1};
     int remotePedSpawnedModel_[kMaxCoopPlayers] = {0};
@@ -2505,6 +2544,13 @@ static void CoopAndreasAutoConstructor() {
     size_t n = fread(pkg, 1, sizeof(pkg) - 1, cmd);
     fclose(cmd);
     if (n > 0 && strstr(pkg, "com.rockstargames.gtasa") != nullptr) {
+        // Evitar que múltiples copias del .so en mods/ o files/ inicien hilos duplicados en el mismo proceso
+        if (getenv("COOP_ANDREAS_BRIDGE_ACTIVE") != nullptr) {
+            LOGW("CoopAndreasBridge already active in this process; skipping duplicate .so instance!");
+            return;
+        }
+        setenv("COOP_ANDREAS_BRIDGE_ACTIVE", "1", 1);
+
         // Pin library in process memory so dlclose() never unmaps our thread
         Dl_info info{};
         if (dladdr(reinterpret_cast<void*>(&CoopAndreasAutoConstructor), &info) && info.dli_fname) {
