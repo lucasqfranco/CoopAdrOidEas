@@ -347,6 +347,14 @@ struct GtaSaNativeSymbols {
     FnCEntityUpdateRwFrame centityUpdateRwFrameFn = nullptr;
     FnCRadarSetEntityBlip cradarSetEntityBlipFn = nullptr;
     FnCRadarClearBlipForEntity cradarClearBlipForEntityFn = nullptr;
+    using FnCRadarChangeBlipColour = void (*)(int blipHandle, uint32_t colour);
+    using FnCRadarSetBlipFriendly = void (*)(int blipHandle, uint8_t friendly);
+    using FnCRadarChangeBlipScale = void (*)(int blipHandle, int scale);
+    using FnCRadarClearBlip = void (*)(int blipHandle);
+    FnCRadarChangeBlipColour cradarChangeBlipColourFn = nullptr;
+    FnCRadarSetBlipFriendly cradarSetBlipFriendlyFn = nullptr;
+    FnCRadarChangeBlipScale cradarChangeBlipScaleFn = nullptr;
+    FnCRadarClearBlip cradarClearBlipFn = nullptr;
     FnC3dMarkersPlaceMarkerCone c3dMarkersPlaceMarkerConeFn = nullptr;
     using FnCTaskOperatorNew = void* (*)(size_t size);
     using FnCTaskSimpleStandStillCtor = void* (*)(void* self, int nTime, bool bLooped, bool bUseAnimIdle, float fBlendData);
@@ -451,6 +459,10 @@ struct GtaSaNativeSymbols {
 
         cradarSetEntityBlipFn = reinterpret_cast<FnCRadarSetEntityBlip>(dlsym(libHandle, "_ZN6CRadar13SetEntityBlipE9eBlipTypeij12eBlipDisplayPc"));
         cradarClearBlipForEntityFn = reinterpret_cast<FnCRadarClearBlipForEntity>(dlsym(libHandle, "_ZN6CRadar18ClearBlipForEntityE9eBlipTypei"));
+        cradarChangeBlipColourFn = reinterpret_cast<FnCRadarChangeBlipColour>(dlsym(libHandle, "_ZN6CRadar16ChangeBlipColourEij"));
+        cradarSetBlipFriendlyFn = reinterpret_cast<FnCRadarSetBlipFriendly>(dlsym(libHandle, "_ZN6CRadar15SetBlipFriendlyEih"));
+        cradarChangeBlipScaleFn = reinterpret_cast<FnCRadarChangeBlipScale>(dlsym(libHandle, "_ZN6CRadar15ChangeBlipScaleEii"));
+        cradarClearBlipFn = reinterpret_cast<FnCRadarClearBlip>(dlsym(libHandle, "_ZN6CRadar9ClearBlipEi"));
         c3dMarkersPlaceMarkerConeFn = reinterpret_cast<FnC3dMarkersPlaceMarkerCone>(dlsym(libHandle, "_ZN10C3dMarkers15PlaceMarkerConeEyR7CVectorfhhhhtfsh"));
         ctaskOperatorNewFn = reinterpret_cast<FnCTaskOperatorNew>(dlsym(libHandle, "_ZN5CTasknwEm"));
         ctaskSimpleStandStillCtorFn = reinterpret_cast<FnCTaskSimpleStandStillCtor>(dlsym(libHandle, "_ZN21CTaskSimpleStandStillC1Eibbf"));
@@ -1715,9 +1727,13 @@ public:
             void* ped = remotePedPtr_[i];
             if (ped && gtaSymbols_.cpoolsGetPedFn && remotePedHandle_[i] > 0) {
                 if (gtaSymbols_.cpoolsGetPedFn(remotePedHandle_[i]) != ped) {
+                    if (remoteBlipHandle_[i] > 0 && gtaSymbols_.cradarClearBlipFn) {
+                        gtaSymbols_.cradarClearBlipFn(remoteBlipHandle_[i]);
+                    }
                     ped = nullptr;
                     remotePedPtr_[i] = nullptr;
                     remotePedHandle_[i] = -1;
+                    remoteBlipHandle_[i] = -1;
                 }
             }
 
@@ -1767,14 +1783,28 @@ public:
                     remotePedSpawnedModel_[i] = static_cast<int>(spawnModel);
 
                     if (handle > 0 && gtaSymbols_.cradarSetEntityBlipFn) {
+                        // En GTA SA arm64 v2.10: eBlipType::BLIP_CHAR = 2 (no 4, que es BLIP_COORD)
+                        // Colores por slot: P1=1(Verde Grove), P2=2(Azul/Celeste), P3=4(Amarillo), P4=5(Morado)
+                        uint32_t slotColor = (i == 0) ? 1u : ((i == 1) ? 2u : ((i == 2) ? 4u : 5u));
                         remoteBlipHandle_[i] = gtaSymbols_.cradarSetEntityBlipFn(
-                            4 /*BLIP_CHAR*/, handle, 1 /*GREEN*/, 3 /*BLIP_DISPLAY_BOTH*/, nullptr
+                            2 /*BLIP_CHAR*/, handle, slotColor, 3 /*BLIP_DISPLAY_BOTH*/, nullptr
                         );
+                        if (remoteBlipHandle_[i] > 0) {
+                            if (gtaSymbols_.cradarChangeBlipColourFn) {
+                                gtaSymbols_.cradarChangeBlipColourFn(remoteBlipHandle_[i], slotColor);
+                            }
+                            if (gtaSymbols_.cradarSetBlipFriendlyFn) {
+                                gtaSymbols_.cradarSetBlipFriendlyFn(remoteBlipHandle_[i], 1);
+                            }
+                            if (gtaSymbols_.cradarChangeBlipScaleFn) {
+                                gtaSymbols_.cradarChangeBlipScaleFn(remoteBlipHandle_[i], 3);
+                            }
+                        }
                     }
 
                     ped = newPed;
-                    LOGI("Spawned 3D Remote Player P%d (ped=%p, handle=%d, model=%u) at (%.2f, %.2f, %.2f)",
-                         i + 1, newPed, handle, spawnModel, targetRemX, targetRemY, targetRemZ);
+                    LOGI("Spawned 3D Remote Player P%d (ped=%p, handle=%d, blip=%d, model=%u) at (%.2f, %.2f, %.2f)",
+                         i + 1, newPed, handle, remoteBlipHandle_[i], spawnModel, targetRemX, targetRemY, targetRemZ);
                 }
             }
 
