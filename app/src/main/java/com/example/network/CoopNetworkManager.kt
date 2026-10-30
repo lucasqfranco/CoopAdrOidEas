@@ -846,6 +846,7 @@ class CoopNetworkManager(private val scope: CoroutineScope) {
                 val seatLabel = when {
                     parsed.seatIndex < 0 -> "A pie (Cámara 3D Libre)"
                     parsed.seatIndex == 0 -> "Vehículo #${parsed.vehicleNetId} (Conductor)"
+                    parsed.isAttachedOnRoof || parsed.seatIndex >= 4 -> "Vehículo #${parsed.vehicleNetId} (Vehicle Surf Techo 🏄)"
                     parsed.isDriveByActive -> "Vehículo #${parsed.vehicleNetId} (Pasajero P${parsed.seatIndex} • Drive-By 🔫)"
                     else -> "Vehículo #${parsed.vehicleNetId} (Pasajero P${parsed.seatIndex})"
                 }
@@ -856,9 +857,11 @@ class CoopNetworkManager(private val scope: CoroutineScope) {
                     heading = parsed.heading,
                     health = parsed.health,
                     armor = parsed.armor,
+                    wantedLevel = parsed.wantedStars.coerceIn(0, 6),
                     vehicleNetId = parsed.vehicleNetId,
                     seatIndex = parsed.seatIndex,
                     isDriveByActive = parsed.isDriveByActive,
+                    isAttachedOnRoof = parsed.isAttachedOnRoof || parsed.seatIndex >= 4,
                     currentVehicle = seatLabel
                 )
             } else p
@@ -871,6 +874,31 @@ class CoopNetworkManager(private val scope: CoroutineScope) {
             telemetryPacketsSynced = _session.value.telemetryPacketsSynced + 1
         )
         return parsed
+    }
+
+    fun triggerAntiSoftlock() {
+        val mySlot = if (_session.value.isHost) 1 else 2
+        CoopNativeBridge.triggerAntiSoftlock(mySlot)
+        _session.value = _session.value.copy(
+            connectionBannerMessage = "🔓 Anti-Softlock aplicado: Cámara 3D restaurada y Z +1.2m (misión preservada)"
+        )
+    }
+
+    fun voteSkipCutscene() {
+        val mySlot = if (_session.value.isHost) 1 else 2
+        val mask = CoopNativeBridge.voteSkipCutscene(mySlot)
+        _session.value = _session.value.copy(
+            connectionBannerMessage = "⏭ Voto para saltar escena registrado (Máscara 4P: 0x${mask.toString(16).uppercase()})"
+        )
+    }
+
+    fun shareWeaponWithPartner() {
+        val mySlot = if (_session.value.isHost) 1 else 2
+        val targetSlot = if (mySlot == 1) 2 else 1
+        CoopNativeBridge.shareWeaponWithPartner(mySlot, targetSlot, 28, 180)
+        _session.value = _session.value.copy(
+            connectionBannerMessage = "🔫 Arma y munición compartidas con el compañero P$targetSlot"
+        )
     }
 
     fun startOnlineRoomMatchmaking(roomCode: String, asHost: Boolean) {

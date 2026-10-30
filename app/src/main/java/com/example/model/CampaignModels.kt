@@ -104,10 +104,13 @@ data class CoopPlayer(
     val posZ: Float = 13.5f,
     val heading: Float = 0.0f,
     val vehicleNetId: Int = 101,
-    val seatIndex: Int = 0, // -1 = a pie, 0 = conductor, 1..3 = pasajero
+    val seatIndex: Int = 0, // -1 = a pie, 0 = conductor, 1..3 = pasajero, 4..6 = Vehicle Surf (techo/chasis)
     val isDriveByActive: Boolean = false,
+    val isAttachedOnRoof: Boolean = false,
     val hasIndependentCamera: Boolean = true
-)
+) {
+    val wantedStars: Int get() = wantedLevel.coerceIn(0, 6)
+}
 
 enum class TacticalPingType(val label: String, val icon: String) {
     REGROUP("Regroup at my position!", "📍"),

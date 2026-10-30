@@ -57,21 +57,29 @@ namespace coopandreas {
 // ============================================================================
 // CONSTANTES DE PROTOCOLO TORNAMIC/COOPANDREAS (PUERTO UDP 6767 + 8990)
 // ============================================================================
-constexpr int kMaxCoopPlayers = 8;
+constexpr int kMaxCoopPlayers = 4;
 constexpr int kCoopAndreasUdpPort = 6767;           // Puerto oficial Tornamic/CoopAndreas
 constexpr int kDefaultControlTcpPort = 8989;        // Puerto TCP Lobby App
 constexpr int kDefaultTelemetryVoiceUdpPort = 8990; // Puerto UDP App Telemetría/Voz
 constexpr int kDefaultDiscoveryUdpPort = 8988;      // Puerto UDP Broadcast LAN
 constexpr int kTickRateHz = 30;                     // 30 Hz sync loop (33ms por tick)
 
-// Tipos de Paquetes Binarios (Protocolo Tornamic/CoopAndreas Mobile)
+// Tipos de Paquetes Binarios (Protocolo Fusionado SA:COOP + Tornamic 4P + Project Kaizo)
 enum PacketType : uint8_t {
-    PKT_HANDSHAKE    = 0x01,
-    PKT_PED_SYNC     = 0x02,
-    PKT_VEHICLE_SYNC = 0x03,
-    PKT_MISSION_SYNC = 0x04,
-    PKT_WEAPON_FIRE  = 0x05,
-    PKT_WORLD_SYNC   = 0x06
+    PKT_HANDSHAKE        = 0x01,
+    PKT_PED_SYNC         = 0x02,
+    PKT_VEHICLE_SYNC     = 0x03,
+    PKT_MISSION_SYNC     = 0x04,
+    PKT_WEAPON_FIRE      = 0x05,
+    PKT_CUTSCENE_SYNC    = 0x06,
+    PKT_WORLD_CHEAT_SYNC = 0x07,
+    PKT_WORLD_SYNC       = 0x08
+};
+
+enum CheatSyncCategory : uint8_t {
+    CHEAT_LOCAL_ONLY   = 0, // HESOYAM, LXGIWYL, KJKSZPJ, UZUMYMW, AEZAKMI (solo jugador local)
+    CHEAT_WORLD_SHARED = 1, // Clima, tráfico, disturbios, velocidad del reloj (sincronizado 4P)
+    CHEAT_VEHICLE_SPAWN = 2 // Vehículo spawneado con ownerSlot y vehicleNetId compartido
 };
 
 constexpr int kMaxSyncedWorldPeds = 6;
@@ -128,6 +136,7 @@ struct PedSyncPacket {
     int32_t ammoInClip = 500;
     uint16_t animGroupId = 0;
     uint16_t animId = 0;
+    uint8_t wantedLevel = 0;       // CWanted individual (0..6 estrellas) sin pisar el local de otros
     uint8_t isCrouching = 0;
     uint8_t isJumping = 0;
     uint8_t isAiming = 0;
@@ -138,7 +147,7 @@ struct VehicleSyncPacket {
     BinaryPacketHeader header;
     int32_t vehicleNetId = 101;
     int32_t vehicleModelId = 492; // 492 = Greenwood
-    int32_t seatIndex = 0;        // -1 = a pie, 0 = conductor, 1..3 = pasajeros
+    int32_t seatIndex = 0;        // -1 = a pie, 0 = conductor, 1..3 = pasajeros, 4..6 = Vehicle Surf (techo/chasis)
     CVector position{2495.0f, -1687.0f, 13.5f};
     CVector velocity{0.0f, 0.0f, 0.0f};
     CVector turnSpeed{0.0f, 0.0f, 0.0f};
@@ -150,7 +159,26 @@ struct VehicleSyncPacket {
     uint8_t primaryColor = 16;    // Grove Green
     uint8_t secondaryColor = 1;
     uint8_t isDriveByActive = 0;  // 1 = Pasajero disparando por ventanilla (Opcode 0713)
+    uint8_t isAttachedOnRoof = 0; // 1 = Project Kaizo Vehicle Surf (Opcode 0464 attach_to_car)
+    uint8_t ownerSlot = 1;        // Autoridad de entidad (1..4)
     uint8_t sirenOrHorn = 0;
+};
+
+struct CutsceneSyncPacket {
+    BinaryPacketHeader header;
+    uint8_t cutsceneActive = 0;
+    uint8_t skipVotesMask = 0;     // Bits 0..3: votos de los slots 1..4 para saltar escena
+    uint8_t activePlayersMask = 1; // Bits 0..3: jugadores presentes en la sesión
+    char missionId[16] = "ls_02";
+};
+
+struct WorldCheatSyncPacket {
+    BinaryPacketHeader header;
+    uint32_t cheatHash = 0;
+    uint8_t cheatCategory = CHEAT_WORLD_SHARED;
+    uint8_t ownerSlot = 1;
+    int16_t spawnedVehicleModelId = 0;
+    char cheatCode[24] = "";
 };
 
 struct MissionSyncPacket {
@@ -176,6 +204,7 @@ struct WeaponFirePacket {
 
 struct SyncedWorldPedEntry {
     uint8_t active = 0;
+    uint8_t ownerSlot = 1; // Handoff de autoridad (1..4) dentro de 150m
     int16_t hostPoolSlot = -1;
     int16_t modelId = 0;
     float x = 0.0f;
@@ -191,8 +220,10 @@ struct SyncedWorldPedEntry {
 
 struct SyncedWorldVehicleEntry {
     uint8_t active = 0;
+    uint8_t ownerSlot = 1; // Handoff de autoridad (1..4) dentro de 150m
     int16_t hostPoolSlot = -1;
     int16_t modelId = 492;
+    int16_t driverModelId = -1; // Modelo del conductor NPC (ej. policía 280/284 en moto 523)
     float x = 0.0f;
     float y = 0.0f;
     float z = 0.0f;
@@ -325,6 +356,7 @@ struct GtaSaNativeSymbols {
     using FnCPopulationRemoveAllRandomPeds = void (*)();
     using FnRpAnimBlendClumpUpdateAnimations = void (*)(void* clump, float timeStep, bool onScreen);
     using FnCCarCtrlCreateCarForScript = void* (*)(int modelId, CVector pos, uint8_t doMissionCleanup);
+    using FnCVehicleSetUpDriver = void* (*)(void* thisVeh, int pedType, bool b2, bool b3);
     using FnCPoolsGetVehicleRef = int (*)(void* veh);
     using FnCPoolsGetVehicle = void* (*)(int handle);
     using FnCWorldClearCarsFromArea = void (*)(float x1, float y1, float z1, float x2, float y2, float z2);
@@ -338,6 +370,7 @@ struct GtaSaNativeSymbols {
     FnCPopulationRemoveAllRandomPeds cpopulationRemoveAllRandomPedsFn = nullptr;
     FnRpAnimBlendClumpUpdateAnimations rpAnimBlendClumpUpdateAnimationsFn = nullptr;
     FnCCarCtrlCreateCarForScript ccarCtrlCreateCarForScriptFn = nullptr;
+    FnCVehicleSetUpDriver cvehicleSetUpDriverFn = nullptr;
     FnCPoolsGetVehicleRef cpoolsGetVehicleRefFn = nullptr;
     FnCPoolsGetVehicle cpoolsGetVehicleFn = nullptr;
     FnCWorldClearCarsFromArea cworldClearCarsFromAreaFn = nullptr;
@@ -427,6 +460,7 @@ struct GtaSaNativeSymbols {
         cpopulationRemoveAllRandomPedsFn = reinterpret_cast<FnCPopulationRemoveAllRandomPeds>(dlsym(libHandle, "_ZN11CPopulation19RemoveAllRandomPedsEv"));
         rpAnimBlendClumpUpdateAnimationsFn = reinterpret_cast<FnRpAnimBlendClumpUpdateAnimations>(dlsym(libHandle, "_Z32RpAnimBlendClumpUpdateAnimationsP7RpClumpfb"));
         ccarCtrlCreateCarForScriptFn = reinterpret_cast<FnCCarCtrlCreateCarForScript>(dlsym(libHandle, "_ZN8CCarCtrl18CreateCarForScriptEi7CVectorh"));
+        cvehicleSetUpDriverFn = reinterpret_cast<FnCVehicleSetUpDriver>(dlsym(libHandle, "_ZN8CVehicle11SetUpDriverEibb"));
         cpoolsGetVehicleRefFn = reinterpret_cast<FnCPoolsGetVehicleRef>(dlsym(libHandle, "_ZN6CPools13GetVehicleRefEP8CVehicle"));
         cpoolsGetVehicleFn = reinterpret_cast<FnCPoolsGetVehicle>(dlsym(libHandle, "_ZN6CPools10GetVehicleEi"));
         cworldClearCarsFromAreaFn = reinterpret_cast<FnCWorldClearCarsFromArea>(dlsym(libHandle, "_ZN6CWorld17ClearCarsFromAreaEffffff"));
@@ -496,11 +530,13 @@ struct PlayerState3D {
 
     int32_t vehicleNetId = 0;
     int32_t vehicleModelId = 492;
-    int32_t seatIndex = -1;
+    int32_t seatIndex = -1; // -1 = a pie, 0 = conductor, 1..3 = pasajeros, 4..6 = Vehicle Surf
     float steerAngle = 0.0f;
     float gasPedal = 0.0f;
     float brakePedal = 0.0f;
     bool isDriveByActive = false;
+    bool isAttachedOnRoof = false;
+    uint8_t ownerSlot = 1;
 
     CVector lastAimOrigin{2495.0f, -1687.0f, 14.0f};
     CVector lastAimTarget{2505.0f, -1680.0f, 14.0f};
@@ -727,13 +763,13 @@ public:
         float dz = targetZ - curZ;
         float distSq = dx * dx + dy * dy + dz * dz;
 
-        // Inferir estado de movimiento (1=STILL, 4=WALK, 6=RUN, 7=SPRINT) si el paquete no lo especifica o si hay desplazamiento
+        // Inferir estado de movimiento (1=STILL, 4=WALK, 6=RUN, 7=SPRINT) solo por velocidad horizontal real o moveState explícito
         float speed2d = std::sqrt(vx * vx + vy * vy);
         int effectiveMoveState = moveState;
         if (effectiveMoveState != 4 && effectiveMoveState != 6 && effectiveMoveState != 7) {
             if (speed2d > 0.14f) effectiveMoveState = 7;      // PEDMOVE_SPRINT
             else if (speed2d > 0.05f) effectiveMoveState = 6; // PEDMOVE_RUN
-            else if (speed2d > 0.008f || (distSq > 0.0004f && distSq < 25.0f)) effectiveMoveState = 4; // PEDMOVE_WALK
+            else if (speed2d > 0.015f) effectiveMoveState = 4; // PEDMOVE_WALK
             else effectiveMoveState = 1;                      // PEDMOVE_STILL
         }
 
@@ -778,10 +814,18 @@ public:
             gtaSymbols_.cworldAddFn(ped);
         }
 
-        // CRÍTICO: En libGTASA.so arm64 v2.10, CPed::SetMoveAnim (0x596cb4) lee m_fMoveAnimRate (+0x688)
-        // en 0x596fec y lo escribe en CAnimBlendAssociation::m_fSpeed (+0x3c) en 0x59707c.
-        // En un CCivilianPed sin pad local, +0x688 vale 0.0f por defecto, congelando la animación en el frame 0.
-        *reinterpret_cast<float*>(pedAddr + 0x688) = (effectiveMoveState > 1) ? 1.0f : 0.0f;
+        // CRÍTICO: m_fMoveAnimRate (+0x688) debe ser siempre 1.0f (incluso en IDLE=1) para que CPed::SetMoveAnim
+        // no asigne m_fSpeed = 0.0f a la asociación de animación ni congele al personaje a mitad de paso.
+        *reinterpret_cast<float*>(pedAddr + 0x688) = 1.0f;
+
+        // Si el actor pasa a estar quieto (PEDMOVE_STILL = 1), reiniciar el flag +0x1c de CTaskSimpleStandStill
+        // para que ProcessPed ejecute FinishRunAnim (0x5ef794) y BlendAnimation(IDLE, 8.0f) (0x5ef7d0).
+        if (effectiveMoveState == 1 && pedIntel != 0) {
+            uintptr_t defaultTaskAddr = *reinterpret_cast<uintptr_t*>(pedIntel + 0x28);
+            if (defaultTaskAddr != 0 && *reinterpret_cast<int32_t*>(pedAddr + 0x6a4) != 1) {
+                *reinterpret_cast<uint8_t*>(defaultTaskAddr + 0x1c) = 0;
+            }
+        }
 
         if (gtaSymbols_.cpedSetMoveStateFn) {
             gtaSymbols_.cpedSetMoveStateFn(ped, effectiveMoveState);
@@ -791,7 +835,7 @@ public:
         if (gtaSymbols_.cpedSetMoveAnimFn) {
             gtaSymbols_.cpedSetMoveAnimFn(ped);
         }
-        if (effectiveMoveState > 1 && gtaSymbols_.rpAnimBlendClumpUpdateAnimationsFn) {
+        if (gtaSymbols_.rpAnimBlendClumpUpdateAnimationsFn) {
             void* clump = *reinterpret_cast<void**>(pedAddr + 0x20);
             if (clump) {
                 gtaSymbols_.rpAnimBlendClumpUpdateAnimationsFn(clump, 0.016f, true);
@@ -865,12 +909,40 @@ public:
 #if defined(__unix__) || defined(__ANDROID__) || defined(__linux__)
         int64_t tickCount = mainThreadTicks_.fetch_add(1) + 1;
 
-        // No intervenir mientras una cinemática oficial esté en reproducción
+        if (!gtaSymbols_.findPlayerPedFn || !gtaSymbols_.findPlayerCoorsFn) return;
+
+        // Cinemáticas cooperativas de 4 jugadores (PKT_CUTSCENE_SYNC): formación escalonada y salto por votación
         if (gtaSymbols_.cutsceneRunning && *gtaSymbols_.cutsceneRunning != 0) {
+            void* cutPed = gtaSymbols_.findPlayerPedFn(-1);
+            if (cutPed) {
+                uintptr_t cAddr = reinterpret_cast<uintptr_t>(cutPed);
+                uintptr_t cMat = *reinterpret_cast<uintptr_t*>(cAddr + 0x18);
+                if (cMat != 0) {
+                    float cx = *reinterpret_cast<float*>(cMat + 0x30);
+                    float cy = *reinterpret_cast<float*>(cMat + 0x34);
+                    float cz = *reinterpret_cast<float*>(cMat + 0x38);
+                    float ch = *reinterpret_cast<float*>(cAddr + 0x6c4);
+                    for (int i = 1; i < kMaxCoopPlayers; ++i) {
+                        if (!players_[i].isActive || !remotePedPtr_[i]) continue;
+                        int slot = i + 1;
+                        float dx = -0.75f * static_cast<float>(slot - 1);
+                        float dy = (slot % 2 == 0) ? 0.65f : -0.65f;
+                        applySmoothPedTransformAndAnim(remotePedPtr_[i], cx + dx, cy + dy, cz, 0.0f, 0.0f, 0.0f, ch, 1, 200.0f);
+                    }
+                }
+            }
+            if (cutsceneSkipVotesMask_ != 0 && gtaSymbols_.ccutsceneMgrSkipCutsceneFn) {
+                uint8_t activeMask = 0x01;
+                for (int i = 1; i < kMaxCoopPlayers; ++i) {
+                    if (players_[i].isActive && players_[i].lastNetworkUpdateMs > 0) activeMask |= static_cast<uint8_t>(1U << i);
+                }
+                if ((cutsceneSkipVotesMask_ & activeMask) == activeMask) {
+                    gtaSymbols_.ccutsceneMgrSkipCutsceneFn();
+                    cutsceneSkipVotesMask_ = 0;
+                }
+            }
             return;
         }
-
-        if (!gtaSymbols_.findPlayerPedFn || !gtaSymbols_.findPlayerCoorsFn) return;
 
         void* localPed = gtaSymbols_.findPlayerPedFn(-1);
         if (!localPed) {
@@ -998,19 +1070,54 @@ public:
         me.health = std::isfinite(rawHealth) ? std::clamp(static_cast<int>(rawHealth), 0, 200) : 100;
         me.armor = std::isfinite(rawArmor) ? std::clamp(static_cast<int>(rawArmor), 0, 200) : 0;
         me.animId = static_cast<uint16_t>(std::clamp(localMoveState, 0, 12));
-        me.vehicleNetId = myVeh ? 101 : 0;
+        me.vehicleNetId = myVeh ? 101 : (me.isAttachedOnRoof ? me.vehicleNetId : 0);
         // En libGTASA.so arm64 v2.10, CEntity::m_nModelIndex (int16_t) está en +0x32 (verificado en CEntity::SetModelIndexNoCreate 0x4ca7e0)
         me.vehicleModelId = myVeh ? static_cast<int32_t>(*reinterpret_cast<int16_t*>(reinterpret_cast<uintptr_t>(myVeh) + 0x32)) : 492;
-        me.seatIndex = myVeh ? 0 : -1;
+        if (myVeh) {
+            me.seatIndex = 0;
+            me.isAttachedOnRoof = false;
+        } else if (!me.isAttachedOnRoof) {
+            me.seatIndex = -1;
+        }
         me.cameraMode = 0; // Cámara 3D Independiente
+
+        // Project Kaizo Anti-Softlock pendiente en el hilo principal
+        if (pendingAntiSoftlock_.exchange(false)) {
+            float unstuckZ = myPos.z + 1.2f;
+            applySmoothPedTransformAndAnim(localPed, myPos.x, myPos.y, unstuckZ, 0.0f, 0.0f, 0.0f, myHeading, 1, 200.0f);
+            me.z = unstuckZ;
+            me.cameraMode = 0;
+        }
+
+        // Respawn Táctico de Project Kaizo si el jugador local muere y hay punto táctico activo
+        if (hasCustomRespawnPos_ && rawHealth <= 0.0f) {
+            applySmoothPedTransformAndAnim(localPed, customRespawnPos_.x, customRespawnPos_.y, customRespawnPos_.z, 0.0f, 0.0f, 0.0f, myHeading, 1, 100.0f);
+            *reinterpret_cast<float*>(localPedAddr + 0x6b4) = 100.0f;
+        }
 
         // ====================================================================
         // SINCRONIZACIÓN DE RELOJ (HORA), CLIMA, PEATONES Y VEHÍCULOS DEL MUNDO (HOST <-> GUEST)
         // ====================================================================
-        // Al salir de la cinemática inicial en el callejón (970.9, -1108.1), activar modo Free Roam ($ONMISSION = 0)
-        // y dar 3.5m de espacio respecto a la pared de ladrillos (X=972.0) colocando al Host en (967.2, -1107.8)
-        // y al Guest a su izquierda en el patio abierto (967.2, -1105.9)
-        if (!initialAlleyFreeRoamDone_ && std::fabs(me.x - 970.9f) < 6.0f && std::fabs(me.y - (-1108.1f)) < 6.0f) {
+        // Si el jugador local está detenido sin tocar el joystick, asegurar que su estado vuelva a IDLE (1)
+        // (evita que el parche de CTaskSimpleStandStill deje a LocalCJ caminando en el lugar)
+        if (mySpeed2d < 0.005f && (*reinterpret_cast<int32_t*>(localPedAddr + 0x550) != 1 || *reinterpret_cast<int32_t*>(localPedAddr + 0x6a4) != 1)) {
+            *reinterpret_cast<float*>(localPedAddr + 0x688) = 1.0f;
+            uintptr_t localIntel = *reinterpret_cast<uintptr_t*>(localPedAddr + 0x538);
+            if (localIntel != 0) {
+                uintptr_t defTask = *reinterpret_cast<uintptr_t*>(localIntel + 0x28);
+                if (defTask != 0) *reinterpret_cast<uint8_t*>(defTask + 0x1c) = 0;
+            }
+            if (gtaSymbols_.cpedSetMoveStateFn) {
+                gtaSymbols_.cpedSetMoveStateFn(localPed, 1);
+            } else {
+                *reinterpret_cast<int32_t*>(localPedAddr + 0x550) = 1;
+            }
+            if (gtaSymbols_.cpedSetMoveAnimFn) {
+                gtaSymbols_.cpedSetMoveAnimFn(localPed);
+            }
+        }
+
+        if (!initialAlleyFreeRoamDone_ && std::fabs(me.x - 970.9f) < 2.5f && std::fabs(me.y - (-1108.1f)) < 2.5f) {
             if (++alleyLandWaitTicks_ >= 20) {
                 if (gtaSymbols_.onAMissionFlagOffset) {
                     *gtaSymbols_.onAMissionFlagOffset = 0;
@@ -1019,7 +1126,9 @@ public:
                 float targetX = 967.2f;
                 float targetY = config_.isHost ? -1107.8f : -1105.9f;
                 float targetZ = 23.98f;
-                applySmoothPedTransformAndAnim(localPed, targetX, targetY, targetZ, 0.0f, 0.0f, 0.0f, myHeading, 1, 100.0f);
+                if (gtaSymbols_.cpedTeleportFn) {
+                    gtaSymbols_.cpedTeleportFn(localPed, CVector{targetX, targetY, targetZ}, 0);
+                }
                 me.x = targetX;
                 me.y = targetY;
                 me.z = targetZ;
@@ -1103,6 +1212,7 @@ public:
 
                                 SyncedWorldPedEntry e{};
                                 e.active = 1;
+                                e.ownerSlot = findClosestOwnerSlotLocked(px, py, pz);
                                 e.hostPoolSlot = static_cast<int16_t>(s);
                                 e.modelId = pModelId;
                                 e.x = px;
@@ -1130,10 +1240,7 @@ public:
                             }
                         }
 
-                        // Si ambos jugadores están en el patio inicial (967.2, -1107.8), acercar los 2 primeros peatones
-                        // del pool real del Host frente a la cámara (969.6, -1107.2) y (969.6, -1105.0) para que sean
-                        // inmediatamente visibles y verificables en pantalla tanto en Host como en Guest
-                        if (inInitialCourtyard) {
+                        if (inInitialCourtyard && mySpeed2d < 0.02f) {
                             if (foundCount >= 1 && best[0].rawPtr) {
                                 best[0].entry.x = 969.6f;
                                 best[0].entry.y = -1107.2f;
@@ -1195,6 +1302,10 @@ public:
                                 int16_t vModel = *reinterpret_cast<int16_t*>(vAddr + 0x32);
                                 if (vModel < 400 || vModel > 611) continue;
 
+                                // Excluir vehículos destruidos/explotados (+0x634 = CVehicle::m_fHealth en arm64 v2.10)
+                                float vHealth = *reinterpret_cast<float*>(vAddr + 0x634);
+                                if (!std::isfinite(vHealth) || vHealth <= 50.0f) continue;
+
                                 uintptr_t vMat = *reinterpret_cast<uintptr_t*>(vAddr + 0x18);
                                 if (vMat == 0) continue;
                                 float vxPos = *reinterpret_cast<float*>(vMat + 0x30);
@@ -1206,12 +1317,21 @@ public:
                                 float dy = vyPos - me.y;
                                 float dz = vzPos - me.z;
                                 float dSq = dx * dx + dy * dy + dz * dz;
-                                if (dSq > (130.0f * 130.0f)) continue;
+                                if (dSq > (150.0f * 150.0f)) continue;
+
+                                // +0x5a0 = CVehicle::m_pDriver en arm64 v2.10 (verificado en CVehicle::SetDriver 0x6a8250)
+                                void* pDriver = *reinterpret_cast<void**>(vAddr + 0x5a0);
+                                int16_t drvModel = -1;
+                                if (pDriver && pDriver != localPed) {
+                                    drvModel = *reinterpret_cast<int16_t*>(reinterpret_cast<uintptr_t>(pDriver) + 0x32);
+                                }
 
                                 SyncedWorldVehicleEntry ve{};
                                 ve.active = 1;
+                                ve.ownerSlot = findClosestOwnerSlotLocked(vxPos, vyPos, vzPos);
                                 ve.hostPoolSlot = static_cast<int16_t>(s);
                                 ve.modelId = vModel;
+                                ve.driverModelId = drvModel;
                                 ve.x = vxPos;
                                 ve.y = vyPos;
                                 ve.z = vzPos;
@@ -1239,9 +1359,7 @@ public:
                             }
                         }
 
-                        // En el patio inicial, situar un automóvil real del pool en (968.8, -1101.2, 23.98) a la izquierda
-                        // de ambos jugadores en el espacio abierto para que el mismo auto sea visible en ambas pantallas
-                        if (inInitialCourtyard && foundVehCount >= 1) {
+                        if (inInitialCourtyard && mySpeed2d < 0.02f && foundVehCount >= 1) {
                             int carIdx = 0;
                             for (int c = 0; c < foundVehCount; ++c) {
                                 if (bestVeh[c].entry.modelId != 481 && bestVeh[c].entry.modelId != 509 && bestVeh[c].entry.modelId != 510) {
@@ -1448,8 +1566,16 @@ public:
                     if (gtaSymbols_.ccarCtrlCreateCarForScriptFn) {
                         void* newVeh = gtaSymbols_.ccarCtrlCreateCarForScriptFn(spawnVehModel, CVector{ve.x, ve.y, ve.z}, 0);
                         if (newVeh) {
-                            // Marcar m_nVehicleCreatedBy (+0x610) = 2 (MISSION_VEHICLE) para que ClearCarsFromArea lo preserve
-                            *reinterpret_cast<uint8_t*>(reinterpret_cast<uintptr_t>(newVeh) + 0x610) = 2;
+                            uintptr_t newVehAddr = reinterpret_cast<uintptr_t>(newVeh);
+                            *reinterpret_cast<float*>(newVehAddr + 0x634) = 1000.0f; // m_fHealth
+                            if (ve.driverModelId > 0 && gtaSymbols_.cvehicleSetUpDriverFn) {
+                                *reinterpret_cast<uint8_t*>(newVehAddr + 0x610) = 1; // RANDOM_VEHICLE requerido por CVehicle::SetUpDriver
+                                void* drv = gtaSymbols_.cvehicleSetUpDriverFn(newVeh, 0, false, false);
+                                if (drv && gtaSymbols_.cpedSetCharCreatedByFn) {
+                                    gtaSymbols_.cpedSetCharCreatedByFn(drv, 2 /*MISSION_CHAR*/);
+                                }
+                            }
+                            *reinterpret_cast<uint8_t*>(newVehAddr + 0x610) = 2; // MISSION_VEHICLE
                             worldSyncVehPtr_[v] = newVeh;
                             worldSyncVehHandle_[v] = gtaSymbols_.cpoolsGetVehicleRefFn ? gtaSymbols_.cpoolsGetVehicleRefFn(newVeh) : -1;
                             worldSyncVehHostSlot_[v] = ve.hostPoolSlot;
@@ -1460,6 +1586,16 @@ public:
                 }
 
                 if (wVeh && wVeh != myVeh) {
+                    uintptr_t wVehAddr = reinterpret_cast<uintptr_t>(wVeh);
+                    *reinterpret_cast<float*>(wVehAddr + 0x634) = 1000.0f; // m_fHealth
+                    if (ve.driverModelId > 0 && *reinterpret_cast<void**>(wVehAddr + 0x5a0) == nullptr && gtaSymbols_.cvehicleSetUpDriverFn) {
+                        *reinterpret_cast<uint8_t*>(wVehAddr + 0x610) = 1;
+                        void* drv = gtaSymbols_.cvehicleSetUpDriverFn(wVeh, 0, false, false);
+                        if (drv && gtaSymbols_.cpedSetCharCreatedByFn) {
+                            gtaSymbols_.cpedSetCharCreatedByFn(drv, 2 /*MISSION_CHAR*/);
+                        }
+                        *reinterpret_cast<uint8_t*>(wVehAddr + 0x610) = 2;
+                    }
                     applySmoothVehicleTransform(wVeh, ve);
                 }
             }
@@ -1856,6 +1992,7 @@ public:
         pkt.ammoInClip = p.ammo;
         pkt.animGroupId = p.animGroupId;
         pkt.animId = p.animId;
+        pkt.wantedLevel = static_cast<uint8_t>(std::clamp(p.wantedLevel, 0, 6));
         pkt.independentCamera = (p.cameraMode == 0) ? 1 : 0;
         return pkt;
     }
@@ -1876,6 +2013,37 @@ public:
         pkt.gasPedal = p.gasPedal;
         pkt.brakePedal = p.brakePedal;
         pkt.isDriveByActive = p.isDriveByActive ? 1 : 0;
+        pkt.isAttachedOnRoof = (p.isAttachedOnRoof || p.seatIndex >= 4) ? 1 : 0;
+        pkt.ownerSlot = p.ownerSlot;
+        return pkt;
+    }
+
+    CutsceneSyncPacket buildCutsceneSyncPacket(int slot) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        CutsceneSyncPacket pkt{};
+        fillHeaderLocked(pkt.header, PKT_CUTSCENE_SYNC, static_cast<uint8_t>(slot));
+        pkt.cutsceneActive = (gtaSymbols_.cutsceneRunning && *gtaSymbols_.cutsceneRunning != 0) ? 1 : 0;
+        pkt.skipVotesMask = cutsceneSkipVotesMask_;
+        uint8_t activeMask = 0x01;
+        for (int i = 1; i < kMaxCoopPlayers; ++i) {
+            if (players_[i].isActive) activeMask |= static_cast<uint8_t>(1U << i);
+        }
+        pkt.activePlayersMask = activeMask;
+        std::snprintf(pkt.missionId, sizeof(pkt.missionId), "%s", mission_.missionId);
+        return pkt;
+    }
+
+    WorldCheatSyncPacket buildWorldCheatSyncPacket(int slot, const std::string& cheatCode, CheatSyncCategory cat, int16_t vehModel = 0) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        WorldCheatSyncPacket pkt{};
+        fillHeaderLocked(pkt.header, PKT_WORLD_CHEAT_SYNC, static_cast<uint8_t>(slot));
+        uint32_t h = 2166136261U;
+        for (char c : cheatCode) h = (h ^ static_cast<uint8_t>(c)) * 16777619U;
+        pkt.cheatHash = h;
+        pkt.cheatCategory = static_cast<uint8_t>(cat);
+        pkt.ownerSlot = static_cast<uint8_t>(slot);
+        pkt.spawnedVehicleModelId = vehModel;
+        std::snprintf(pkt.cheatCode, sizeof(pkt.cheatCode), "%s", cheatCode.c_str());
         return pkt;
     }
 
@@ -1990,6 +2158,8 @@ public:
                 p.ammo = ped->ammoInClip;
                 p.animGroupId = ped->animGroupId;
                 p.animId = ped->animId;
+                // Guardar las estrellas individuales del compañero sin sobreescribir el CWanted local
+                p.wantedLevel = std::clamp(static_cast<int>(ped->wantedLevel), 0, 6);
                 p.cameraMode = (ped->independentCamera == 1) ? 0 : 1;
                 packetsProcessed_.fetch_add(1);
                 return true;
@@ -2012,16 +2182,34 @@ public:
                 p.gasPedal = veh->gasPedal;
                 p.brakePedal = veh->brakePedal;
                 p.isDriveByActive = (veh->isDriveByActive != 0);
+                p.isAttachedOnRoof = (veh->isAttachedOnRoof != 0 || veh->seatIndex >= 4);
+                p.ownerSlot = veh->ownerSlot;
 
                 if (veh->vehicleNetId > 0 && veh->seatIndex == 0) {
                     for (int i = 0; i < kMaxCoopPlayers; ++i) {
                         if (i != idx && players_[i].isActive && players_[i].vehicleNetId == veh->vehicleNetId && players_[i].seatIndex > 0) {
                             players_[i].x = veh->position.x;
                             players_[i].y = veh->position.y;
-                            players_[i].z = veh->position.z;
+                            players_[i].z = veh->position.z + (players_[i].isAttachedOnRoof ? 1.35f : 0.0f);
                             players_[i].heading = veh->heading;
                         }
                     }
+                }
+                packetsProcessed_.fetch_add(1);
+                return true;
+            }
+            case PKT_CUTSCENE_SYNC: {
+                if (len < sizeof(CutsceneSyncPacket)) return false;
+                const auto* cs = reinterpret_cast<const CutsceneSyncPacket*>(data);
+                cutsceneSkipVotesMask_ |= cs->skipVotesMask;
+                packetsProcessed_.fetch_add(1);
+                return true;
+            }
+            case PKT_WORLD_CHEAT_SYNC: {
+                if (len < sizeof(WorldCheatSyncPacket)) return false;
+                const auto* wc = reinterpret_cast<const WorldCheatSyncPacket*>(data);
+                if (wc->cheatCategory == CHEAT_WORLD_SHARED) {
+                    lastWorldCheatSynced_ = wc->cheatCode;
                 }
                 packetsProcessed_.fetch_add(1);
                 return true;
@@ -2306,6 +2494,57 @@ public:
         }
     }
 
+    // Project Kaizo: Anti-Softlock (restaura cámara 3D, limpia bloqueo y eleva Z + 1.2m sin abortar misión)
+    bool triggerAntiSoftlock(int slot) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        int idx = std::clamp(slot, 1, kMaxCoopPlayers) - 1;
+        config_.cameraMode = 0;
+        players_[idx].cameraMode = 0;
+        players_[idx].z += 1.2f;
+        pendingAntiSoftlock_.store(true);
+        opcodesExecuted_.fetch_add(1);
+        return true;
+    }
+
+    // Project Kaizo: Transferir arma y munición al compañero más cercano
+    bool transferWeaponToPeer(int fromSlot, int toSlot, int weaponId, int ammo) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        int srcIdx = std::clamp(fromSlot, 1, kMaxCoopPlayers) - 1;
+        int dstIdx = std::clamp(toSlot, 1, kMaxCoopPlayers) - 1;
+        players_[dstIdx].weaponId = weaponId > 0 ? weaponId : players_[srcIdx].weaponId;
+        players_[dstIdx].ammo = ammo > 0 ? ammo : std::max(players_[srcIdx].ammo / 2, 60);
+        opcodesExecuted_.fetch_add(1);
+        return true;
+    }
+
+    // Project Kaizo: Fijar coordenada de Respawn Táctico grupal conservando vida y chaleco
+    void setTacticalRespawnPoint(float x, float y, float z) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        customRespawnPos_ = CVector{x, y, z};
+        hasCustomRespawnPos_ = true;
+    }
+
+    // SA:COOP: Clasificador de trucos (LOCAL_ONLY vs WORLD_SHARED vs VEHICLE_SPAWN)
+    int classifyAndSyncCheat(const std::string& rawCode, int slot = 1) {
+        std::string code = trim(rawCode);
+        for (char& c : code) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+        if (code == "HESOYAM" || code == "LXGIWYL" || code == "KJKSZPJ" || code == "UZUMYMW" ||
+            code == "AEZAKMI" || code == "ASNAEB" || code == "BAGUVIX" || code == "FULLCLIP") {
+            return static_cast<int>(CHEAT_LOCAL_ONLY);
+        }
+        std::lock_guard<std::mutex> lock(mutex_);
+        lastWorldCheatSynced_ = code;
+        return static_cast<int>(CHEAT_WORLD_SHARED);
+    }
+
+    // SA:COOP: Votación de 4 jugadores para saltar cinemática (PKT_CUTSCENE_SYNC)
+    uint8_t voteSkipCutscene(int slot) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        int idx = std::clamp(slot, 1, kMaxCoopPlayers) - 1;
+        cutsceneSkipVotesMask_ |= static_cast<uint8_t>(1U << idx);
+        return cutsceneSkipVotesMask_;
+    }
+
     std::string getPlayerStateJson(int slot) {
         std::lock_guard<std::mutex> lock(mutex_);
         int idx = std::clamp(slot, 1, kMaxCoopPlayers) - 1;
@@ -2347,7 +2586,7 @@ public:
         char buf[1024];
         std::snprintf(
             buf, sizeof(buf),
-            "libCoopAndreasBridge.so v2.8 (Tornamic Port) | Role=%s (Slot %d) | Room=%s | UDP=%d/%d | "
+            "libCoopAndreasBridge.so v2.9 (SA:COOP + Tornamic 4P + Kaizo) | Role=%s (Slot %d) | Room=%s | UDP=%d/%d | "
             "Players=%d/%d | Cam=%s | GOTHook=%s (Ticks=%lld) | LocalCJ=(%.1f,%.1f,%.1f anim=%u) | "
             "RemoteP%d=(%.1f,%.1f,%.1f ped=%p anim=%u) | Clock=%02u:%02u Weather=%d/%d WorldPeds=%u(m0=%d@%.1f,%.1f) WorldVehs=%u(m0=%d@%.1f,%.1f) | "
             "$ONMISSION=%d (%s CP#%d) | Opcodes=%lld | Packets=%lld",
@@ -2558,6 +2797,23 @@ private:
         return s.substr(first, (last - first + 1));
     }
 
+    uint8_t findClosestOwnerSlotLocked(float ex, float ey, float ez) const {
+        uint8_t bestSlot = 1;
+        float bestDistSq = 150.0f * 150.0f;
+        for (int i = 0; i < kMaxCoopPlayers; ++i) {
+            if (!players_[i].isActive) continue;
+            float dx = ex - players_[i].x;
+            float dy = ey - players_[i].y;
+            float dz = ez - players_[i].z;
+            float dSq = dx * dx + dy * dy + dz * dz;
+            if (dSq < bestDistSq) {
+                bestDistSq = dSq;
+                bestSlot = static_cast<uint8_t>(i + 1);
+            }
+        }
+        return bestSlot;
+    }
+
     std::mutex mutex_;
     std::atomic<bool> initialized_{false};
     std::atomic<bool> udpThreadRunning_{false};
@@ -2565,21 +2821,26 @@ private:
     std::atomic<int64_t> mainThreadTicks_{0};
     std::atomic<int64_t> packetsProcessed_{0};
     std::atomic<int64_t> opcodesExecuted_{0};
+    std::atomic<bool> pendingAntiSoftlock_{false};
     std::thread udpWorkerThread_;
     GtaSaNativeSymbols gtaSymbols_;
     BridgeConfig config_;
     PlayerState3D players_[kMaxCoopPlayers];
     MissionSyncState mission_;
     WorldSyncState worldState_;
+    uint8_t cutsceneSkipVotesMask_ = 0;
+    std::string lastWorldCheatSynced_;
+    bool hasCustomRespawnPos_ = false;
+    CVector customRespawnPos_{2495.0f, -1687.0f, 13.5f};
 
     void* lastLocalPedPtr_ = nullptr;
     bool initialSyncTeleportDone_ = false;
     bool initialAlleyFreeRoamDone_ = false;
     int64_t alleyLandWaitTicks_ = 0;
     void* remotePedPtr_[kMaxCoopPlayers] = {nullptr};
-    int remotePedHandle_[kMaxCoopPlayers] = {-1, -1, -1, -1, -1, -1, -1, -1};
+    int remotePedHandle_[kMaxCoopPlayers] = {-1, -1, -1, -1};
     int remotePedSpawnedModel_[kMaxCoopPlayers] = {0};
-    int remoteBlipHandle_[kMaxCoopPlayers] = {-1, -1, -1, -1, -1, -1, -1, -1};
+    int remoteBlipHandle_[kMaxCoopPlayers] = {-1, -1, -1, -1};
 
     void* worldSyncPedPtr_[kMaxSyncedWorldPeds] = {nullptr};
     int worldSyncPedHandle_[kMaxSyncedWorldPeds] = {-1, -1, -1, -1, -1, -1};
@@ -2621,7 +2882,7 @@ extern "C" JNIEXPORT void* __aml_getmodinfo() {
                 g_amlModInfoBuffer,
                 "net.coopandreas.bridge",
                 "CoopAndreas Native Bridge",
-                "2.3.0",
+                "2.9.0",
                 "CoopAndreas Team"
             );
             g_amlModInfoInitialized = true;
@@ -2632,14 +2893,6 @@ extern "C" JNIEXPORT void* __aml_getmodinfo() {
 
 extern "C" JNIEXPORT void* GetModInfo() {
     return __aml_getmodinfo();
-}
-
-extern "C" JNIEXPORT void OnModPreLoad() {
-    LOGI("AML OnModPreLoad: CoopAndreas Native Bridge v2.3");
-}
-
-extern "C" JNIEXPORT void OnModLoad() {
-    LOGI("AML OnModLoad: CoopAndreas Native Bridge v2.3");
 }
 #endif
 
@@ -2947,6 +3200,61 @@ Java_com_example_bridge_CoopNativeBridge_nativeShutdownBridge(
     jobject /* thiz */
 ) {
     coopandreas::CoopEngineBridge::instance().shutdown();
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_example_bridge_CoopNativeBridge_nativeTriggerAntiSoftlock(
+    JNIEnv* /* env */,
+    jobject /* thiz */,
+    jint slot
+) {
+    return coopandreas::CoopEngineBridge::instance().triggerAntiSoftlock(static_cast<int>(slot)) ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_example_bridge_CoopNativeBridge_nativeShareWeaponWithPartner(
+    JNIEnv* /* env */,
+    jobject /* thiz */,
+    jint fromSlot,
+    jint toSlot,
+    jint weaponId,
+    jint ammo
+) {
+    return coopandreas::CoopEngineBridge::instance().transferWeaponToPeer(
+        static_cast<int>(fromSlot), static_cast<int>(toSlot), static_cast<int>(weaponId), static_cast<int>(ammo)
+    ) ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_com_example_bridge_CoopNativeBridge_nativeClassifyAndSyncCheat(
+    JNIEnv* env,
+    jobject /* thiz */,
+    jstring cheatCode,
+    jint slot
+) {
+    return static_cast<jint>(coopandreas::CoopEngineBridge::instance().classifyAndSyncCheat(
+        jstringToStdString(env, cheatCode), static_cast<int>(slot)
+    ));
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_com_example_bridge_CoopNativeBridge_nativeVoteSkipCutscene(
+    JNIEnv* /* env */,
+    jobject /* thiz */,
+    jint slot
+) {
+    return static_cast<jint>(coopandreas::CoopEngineBridge::instance().voteSkipCutscene(static_cast<int>(slot)));
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_example_bridge_CoopNativeBridge_nativeSetTacticalRespawnPoint(
+    JNIEnv* /* env */,
+    jobject /* thiz */,
+    jfloat x,
+    jfloat y,
+    jfloat z
+) {
+    coopandreas::CoopEngineBridge::instance().setTacticalRespawnPoint(x, y, z);
 }
 
 #endif

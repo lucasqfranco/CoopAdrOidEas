@@ -231,8 +231,9 @@ fun ActiveMissionOverlay(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Column(modifier = Modifier.weight(1f)) {
+                                val starsText = if (p.wantedStars > 0) " • ${"★".repeat(p.wantedStars)}" else ""
                                 Text(
-                                    text = "P${idx + 1} ${p.skin.displayName} • ${p.currentVehicle}",
+                                    text = "P${idx + 1} ${p.skin.displayName} • ${p.currentVehicle}$starsText",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = Color.White
                                 )
@@ -426,6 +427,48 @@ fun ActiveMissionOverlay(
                         fontFamily = BebasNeueFontFamily,
                         fontSize = 15.sp,
                         color = Color.Black
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // Botones rápidos de SA:COOP + Project Kaizo: Anti-Softlock y Votación Saltar Escena
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedButton(
+                    onClick = { viewModel.coopNetworkManager.triggerAntiSoftlock() },
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(42.dp)
+                        .testTag("anti_softlock_button"),
+                    shape = RoundedCornerShape(10.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, ArmorBlue)
+                ) {
+                    Text(
+                        text = "🔓 Destrabar (Anti-Softlock)",
+                        fontFamily = BebasNeueFontFamily,
+                        fontSize = 13.sp,
+                        color = ArmorBlue
+                    )
+                }
+
+                OutlinedButton(
+                    onClick = { viewModel.coopNetworkManager.voteSkipCutscene() },
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(42.dp)
+                        .testTag("skip_cutscene_vote_button"),
+                    shape = RoundedCornerShape(10.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, SanAndreasGold)
+                ) {
+                    Text(
+                        text = "⏭ Saltar Escena",
+                        fontFamily = BebasNeueFontFamily,
+                        fontSize = 13.sp,
+                        color = SanAndreasGold
                     )
                 }
             }

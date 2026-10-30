@@ -130,6 +130,14 @@ fun PlayerCard(
                             style = MaterialTheme.typography.bodyMedium,
                             color = GroveGreen
                         )
+                        if (player.wantedStars > 0) {
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "★".repeat(player.wantedStars),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = SanAndreasGold
+                            )
+                        }
                     }
                 }
 

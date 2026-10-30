@@ -16,15 +16,23 @@ data class Player3DTelemetry(
     val health: Int = 100,
     val armor: Int = 100,
     val weaponId: Int = 0,
+    val wantedStars: Int = 0,
     val vehicleNetId: Int = -1,
     val vehicleModelId: Int = 0,
     val seatIndex: Int = -1,
     val isDriveByActive: Boolean = false,
+    val isAttachedOnRoof: Boolean = false,
     val independentCamera: Boolean = true,
     val onMissionFlag: Int = 0,
     val missionId: String = "ls_01",
     val checkpointIndex: Int = 0
 )
+
+enum class CheatSyncCategory {
+    LOCAL_ONLY,
+    WORLD_SHARED,
+    VEHICLE_SPAWN
+}
 
 object CoopNativeBridge {
     const val OPCODE_COOP_SYNC_LOCAL_PLAYER = 0x0D00
@@ -107,6 +115,11 @@ object CoopNativeBridge {
     private external fun nativeGetPlayerStateJson(slot: Int): String
     private external fun nativeGetBridgeDiagnosticSummary(): String
     private external fun nativeShutdownBridge()
+    private external fun nativeTriggerAntiSoftlock(slot: Int): Boolean
+    private external fun nativeShareWeaponWithPartner(fromSlot: Int, toSlot: Int, weaponId: Int, ammo: Int): Boolean
+    private external fun nativeClassifyAndSyncCheat(cheatCode: String, slot: Int): Int
+    private external fun nativeVoteSkipCutscene(slot: Int): Int
+    private external fun nativeSetTacticalRespawnPoint(x: Float, y: Float, z: Float)
 
     fun initBridge(
         isHost: Boolean,
@@ -229,7 +242,7 @@ object CoopNativeBridge {
         )
         return String.format(
             Locale.US,
-            "COOP_TELEM_V2|%d|%d|%.2f|%.2f|%.2f|%.1f|%d|%d|%d|%d|%d|%d|%d|%d|%s|%d",
+            "COOP_TELEM_V2|%d|%d|%.2f|%.2f|%.2f|%.1f|%d|%d|%d|%d|%d|%d|%d|%d|%s|%d|%d|%d",
             p.slot,
             p.skinId,
             p.x,
@@ -245,7 +258,9 @@ object CoopNativeBridge {
             if (p.independentCamera) 1 else 0,
             p.onMissionFlag,
             p.missionId,
-            p.checkpointIndex
+            p.checkpointIndex,
+            p.wantedStars.coerceIn(0, 6),
+            if (p.isAttachedOnRoof || p.seatIndex >= 4) 1 else 0
         )
     }
 
@@ -254,6 +269,7 @@ object CoopNativeBridge {
         val parts = packet.trim().split("|")
         if (parts.size < 17) return null
         return try {
+            val seat = parts[11].toIntOrNull() ?: -1
             val parsed = Player3DTelemetry(
                 slot = parts[1].toIntOrNull() ?: 2,
                 skinId = parts[2].toIntOrNull() ?: 0,
@@ -264,9 +280,11 @@ object CoopNativeBridge {
                 health = parts[7].toIntOrNull() ?: 100,
                 armor = parts[8].toIntOrNull() ?: 100,
                 weaponId = parts[9].toIntOrNull() ?: 0,
+                wantedStars = (parts.getOrNull(17)?.toIntOrNull() ?: 0).coerceIn(0, 6),
                 vehicleNetId = parts[10].toIntOrNull() ?: -1,
-                seatIndex = parts[11].toIntOrNull() ?: -1,
+                seatIndex = seat,
                 isDriveByActive = (parts[12].toIntOrNull() ?: 0) == 1,
+                isAttachedOnRoof = ((parts.getOrNull(18)?.toIntOrNull() ?: 0) == 1) || seat >= 4,
                 independentCamera = (parts[13].toIntOrNull() ?: 1) == 1,
                 onMissionFlag = parts[14].toIntOrNull() ?: 0,
                 missionId = parts[15],
@@ -334,6 +352,61 @@ object CoopNativeBridge {
         if (isNativeLoaded) {
             try {
                 nativeShutdownBridge()
+            } catch (_: Throwable) {}
+        }
+    }
+
+    fun triggerAntiSoftlock(slot: Int = currentLocalSlot): Boolean {
+        val cur = playerSlots[slot] ?: Player3DTelemetry(slot = slot)
+        playerSlots[slot] = cur.copy(z = cur.z + 1.2f, independentCamera = true)
+        currentCameraIndependent = true
+        if (isNativeLoaded) {
+            try {
+                return nativeTriggerAntiSoftlock(slot)
+            } catch (_: Throwable) {}
+        }
+        return true
+    }
+
+    fun shareWeaponWithPartner(fromSlot: Int = currentLocalSlot, toSlot: Int = 2, weaponId: Int = 28, ammo: Int = 180): Boolean {
+        val dst = playerSlots[toSlot] ?: Player3DTelemetry(slot = toSlot)
+        playerSlots[toSlot] = dst.copy(weaponId = weaponId)
+        if (isNativeLoaded) {
+            try {
+                return nativeShareWeaponWithPartner(fromSlot, toSlot, weaponId, ammo)
+            } catch (_: Throwable) {}
+        }
+        return true
+    }
+
+    fun classifyAndSyncCheat(cheatCode: String, slot: Int = currentLocalSlot): CheatSyncCategory {
+        val normalized = cheatCode.trim().uppercase(Locale.US)
+        if (isNativeLoaded) {
+            try {
+                val res = nativeClassifyAndSyncCheat(normalized, slot)
+                return CheatSyncCategory.entries.getOrElse(res) { CheatSyncCategory.WORLD_SHARED }
+            } catch (_: Throwable) {}
+        }
+        return when (normalized) {
+            "HESOYAM", "LXGIWYL", "KJKSZPJ", "UZUMYMW", "AEZAKMI", "ASNAEB", "BAGUVIX", "FULLCLIP" ->
+                CheatSyncCategory.LOCAL_ONLY
+            else -> CheatSyncCategory.WORLD_SHARED
+        }
+    }
+
+    fun voteSkipCutscene(slot: Int = currentLocalSlot): Int {
+        if (isNativeLoaded) {
+            try {
+                return nativeVoteSkipCutscene(slot)
+            } catch (_: Throwable) {}
+        }
+        return 1 shl ((slot - 1).coerceIn(0, 3))
+    }
+
+    fun setTacticalRespawnPoint(x: Float, y: Float, z: Float) {
+        if (isNativeLoaded) {
+            try {
+                nativeSetTacticalRespawnPoint(x, y, z)
             } catch (_: Throwable) {}
         }
     }
