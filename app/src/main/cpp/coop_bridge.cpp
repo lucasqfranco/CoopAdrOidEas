@@ -1937,13 +1937,16 @@ public:
                                 break;
                             }
                         }
-                    } else if (config_.isHost && wantedHostSlot >= 0 && gtaSymbols_.ms_pVehiclePool && *gtaSymbols_.ms_pVehiclePool) {
-                        const GtaPoolGeneric* vehPool = *gtaSymbols_.ms_pVehiclePool;
-                        if (vehPool->objects && vehPool->byteMap && wantedHostSlot < vehPool->size &&
-                            (vehPool->byteMap[wantedHostSlot] & 0x80) == 0) {
-                            uintptr_t vAddr = reinterpret_cast<uintptr_t>(vehPool->objects) +
-                                              static_cast<uintptr_t>(wantedHostSlot) * kGtaSaVehicleStructSize;
-                            targetVeh = reinterpret_cast<void*>(vAddr);
+                    } else if (config_.isHost && wantedHostSlot >= 0 && gtaSymbols_.cpoolsVehiclePool) {
+                        void* vPoolPtr = *reinterpret_cast<void**>(gtaSymbols_.cpoolsVehiclePool);
+                        if (vPoolPtr) {
+                            uintptr_t vPoolAddr = reinterpret_cast<uintptr_t>(vPoolPtr);
+                            uint8_t* vObjects = *reinterpret_cast<uint8_t**>(vPoolAddr + 0x00);
+                            uint8_t* vByteMap = *reinterpret_cast<uint8_t**>(vPoolAddr + 0x08);
+                            int32_t vPoolSize = *reinterpret_cast<int32_t*>(vPoolAddr + 0x10);
+                            if (vObjects && vByteMap && wantedHostSlot < vPoolSize && (vByteMap[wantedHostSlot] & 0x80) == 0) {
+                                targetVeh = reinterpret_cast<void*>(vObjects + static_cast<size_t>(wantedHostSlot) * 0xc68);
+                            }
                         }
                     }
 
@@ -1986,10 +1989,12 @@ public:
                                 if (remCurrentlyInVeh && remCurrentVeh != targetVeh) {
                                     warpPedOutOfVehicle(ped);
                                 }
-                                warpPedIntoVehicleDriver(ped, targetVeh);
+                                warpPedIntoVehicleDriver(ped, targetVeh, localPed);
                             }
                             // Si el compañero remoto es el conductor y nosotros no somos el conductor, sincronizar el auto desde rem
                             if (targetVeh != myVeh || me.seatIndex > 0) {
+                                float cH = std::cos(rem.heading);
+                                float sH = std::sin(rem.heading);
                                 SyncedWorldVehicleEntry remVe{};
                                 remVe.x = targetRemX;
                                 remVe.y = targetRemY;
@@ -1997,10 +2002,12 @@ public:
                                 remVe.vx = rem.vx;
                                 remVe.vy = rem.vy;
                                 remVe.vz = rem.vz;
-                                remVe.heading = rem.heading;
-                                remVe.steerAngle = rem.steerAngle;
-                                remVe.gasPedal = rem.gasPedal;
-                                remVe.brakePedal = rem.brakePedal;
+                                remVe.rightX = cH;
+                                remVe.rightY = sH;
+                                remVe.rightZ = 0.0f;
+                                remVe.upX = -sH;
+                                remVe.upY = cH;
+                                remVe.upZ = 0.0f;
                                 applySmoothVehicleTransform(targetVeh, remVe);
                             }
                         } else {
