@@ -1890,12 +1890,12 @@ public:
                     remotePedSpawnedModel_[i] = static_cast<int>(spawnModel);
 
                     if (handle > 0 && gtaSymbols_.cradarSetEntityBlipFn) {
-                        // En GTA SA arm64 v2.10: CRadar::DrawEntityBlip y CRadar::Draw3dMarkers coinciden en color
-                        // cuando:
-                        // - P1 (i==0): colour = 1 (GREEN), friendly = 0 -> Verde tanto en minimapa como en cono sobre la cabeza
-                        // - P2 (i==1): colour = 0 (RED),   friendly = 1 -> Azul aliado tanto en minimapa como en cono sobre la cabeza
+                        // En GTA SA arm64 v2.10: cuando friendly = 0, tanto CRadar::DrawEntityBlip (minimapa)
+                        // como CRadar::Draw3dMarkers (cono 3D sobre la cabeza) usan exactamente slotColor:
+                        // - P1 (i==0): colour = 1 (VERDE) en minimapa y cono 3D
+                        // - P2 (i==1): colour = 0 (ROJO)  en minimapa y cono 3D
                         uint32_t slotColor = (i == 0) ? 1u : 0u;
-                        uint8_t isFriendly = (i == 0) ? 0u : 1u;
+                        uint8_t isFriendly = 0u;
                         remoteBlipHandle_[i] = gtaSymbols_.cradarSetEntityBlipFn(
                             2 /*BLIP_CHAR*/, handle, slotColor, 3 /*BLIP_DISPLAY_BOTH*/, nullptr
                         );
