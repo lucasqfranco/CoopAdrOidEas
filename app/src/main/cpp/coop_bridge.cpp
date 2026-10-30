@@ -1423,6 +1423,21 @@ public:
             // 1. Instanciar y actualizar en el Guest los peatones reales sincronizados desde el Host (NUNCA modelo 0 / CJ)
             for (int k = 0; k < kMaxSyncedWorldPeds; ++k) {
                 const SyncedWorldPedEntry& wp = worldState_.peds[k];
+                bool validPedEntry = (wp.active != 0 && wp.modelId > 0 && wp.modelId <= 300);
+                if (validPedEntry && (worldSyncPedPtr_[k] == nullptr || worldSyncPedHostSlot_[k] != wp.hostPoolSlot)) {
+                    for (int otherK = k + 1; otherK < kMaxSyncedWorldPeds; ++otherK) {
+                        if (worldSyncPedPtr_[otherK] != nullptr &&
+                            (worldSyncPedHostSlot_[otherK] == wp.hostPoolSlot ||
+                             (worldSyncPedModel_[otherK] == wp.modelId &&
+                              worldState_.peds[otherK].hostPoolSlot != worldSyncPedHostSlot_[otherK]))) {
+                            std::swap(worldSyncPedPtr_[k], worldSyncPedPtr_[otherK]);
+                            std::swap(worldSyncPedHandle_[k], worldSyncPedHandle_[otherK]);
+                            std::swap(worldSyncPedHostSlot_[k], worldSyncPedHostSlot_[otherK]);
+                            std::swap(worldSyncPedModel_[k], worldSyncPedModel_[otherK]);
+                            break;
+                        }
+                    }
+                }
                 void* wPed = worldSyncPedPtr_[k];
                 if (wPed && gtaSymbols_.cpoolsGetPedFn && worldSyncPedHandle_[k] > 0) {
                     if (gtaSymbols_.cpoolsGetPedFn(worldSyncPedHandle_[k]) != wPed) {
@@ -1433,7 +1448,6 @@ public:
                     }
                 }
 
-                bool validPedEntry = (wp.active != 0 && wp.modelId > 0 && wp.modelId <= 300);
                 bool exactPedModelLoaded = validPedEntry && gtaSymbols_.isModelLoaded(wp.modelId);
                 if (validPedEntry && !exactPedModelLoaded && canRequestStreamingThisTick && gtaSymbols_.cstreamingRequestModelFn) {
                     gtaSymbols_.cstreamingRequestModelFn(wp.modelId, 2);
@@ -1522,8 +1536,24 @@ public:
                 529, 533, 534, 535, 536, 540, 541, 542, 545, 546, 547, 549, 550, 551, 558, 559,
                 560, 561, 562, 565, 566, 567, 575, 576, 579, 580, 585, 587, 589, 596, 597, 600, 602, 603
             };
+            static int sTotalDriversCreated = 0;
             for (int v = 0; v < kMaxSyncedWorldVehicles; ++v) {
                 const SyncedWorldVehicleEntry& ve = worldState_.vehicles[v];
+                bool validVehEntry = (ve.active != 0 && ve.modelId >= 400 && ve.modelId <= 611);
+                if (validVehEntry && (worldSyncVehPtr_[v] == nullptr || worldSyncVehHostSlot_[v] != ve.hostPoolSlot)) {
+                    for (int otherV = v + 1; otherV < kMaxSyncedWorldVehicles; ++otherV) {
+                        if (worldSyncVehPtr_[otherV] != nullptr &&
+                            (worldSyncVehHostSlot_[otherV] == ve.hostPoolSlot ||
+                             (worldSyncVehModel_[otherV] == ve.modelId &&
+                              worldState_.vehicles[otherV].hostPoolSlot != worldSyncVehHostSlot_[otherV]))) {
+                            std::swap(worldSyncVehPtr_[v], worldSyncVehPtr_[otherV]);
+                            std::swap(worldSyncVehHandle_[v], worldSyncVehHandle_[otherV]);
+                            std::swap(worldSyncVehHostSlot_[v], worldSyncVehHostSlot_[otherV]);
+                            std::swap(worldSyncVehModel_[v], worldSyncVehModel_[otherV]);
+                            break;
+                        }
+                    }
+                }
                 void* wVeh = worldSyncVehPtr_[v];
                 if (wVeh && gtaSymbols_.cpoolsGetVehicleFn && worldSyncVehHandle_[v] > 0) {
                     if (gtaSymbols_.cpoolsGetVehicleFn(worldSyncVehHandle_[v]) != wVeh) {
@@ -1534,7 +1564,6 @@ public:
                     }
                 }
 
-                bool validVehEntry = (ve.active != 0 && ve.modelId >= 400 && ve.modelId <= 611);
                 bool exactVehModelLoaded = validVehEntry && gtaSymbols_.isModelLoaded(ve.modelId);
                 if (validVehEntry && !exactVehModelLoaded && canRequestStreamingThisTick && gtaSymbols_.cstreamingRequestModelFn) {
                     gtaSymbols_.cstreamingRequestModelFn(ve.modelId, 2);
@@ -1542,7 +1571,12 @@ public:
 
                 if (!validVehEntry || (wVeh && exactVehModelLoaded && worldSyncVehModel_[v] != ve.modelId && wVeh != myVeh)) {
                     if (wVeh && wVeh != myVeh) {
-                        *reinterpret_cast<uint8_t*>(reinterpret_cast<uintptr_t>(wVeh) + 0x610) = 1;
+                        uintptr_t oldVehAddr = reinterpret_cast<uintptr_t>(wVeh);
+                        void* oldDrv = *reinterpret_cast<void**>(oldVehAddr + 0x5a0);
+                        if (oldDrv && gtaSymbols_.cpedSetCharCreatedByFn) {
+                            gtaSymbols_.cpedSetCharCreatedByFn(oldDrv, 1 /*RANDOM_CHAR*/);
+                        }
+                        *reinterpret_cast<uint8_t*>(oldVehAddr + 0x610) = 1;
                         wVeh = nullptr;
                         worldSyncVehPtr_[v] = nullptr;
                         worldSyncVehHandle_[v] = -1;
@@ -1568,11 +1602,20 @@ public:
                         if (newVeh) {
                             uintptr_t newVehAddr = reinterpret_cast<uintptr_t>(newVeh);
                             *reinterpret_cast<float*>(newVehAddr + 0x634) = 1000.0f; // m_fHealth
-                            if (ve.driverModelId > 0 && gtaSymbols_.cvehicleSetUpDriverFn) {
+                            if (ve.driverModelId > 0 && gtaSymbols_.cvehicleSetUpDriverFn && sTotalDriversCreated < 4) {
                                 *reinterpret_cast<uint8_t*>(newVehAddr + 0x610) = 1; // RANDOM_VEHICLE requerido por CVehicle::SetUpDriver
                                 void* drv = gtaSymbols_.cvehicleSetUpDriverFn(newVeh, 0, false, false);
-                                if (drv && gtaSymbols_.cpedSetCharCreatedByFn) {
-                                    gtaSymbols_.cpedSetCharCreatedByFn(drv, 2 /*MISSION_CHAR*/);
+                                if (drv) {
+                                    ++sTotalDriversCreated;
+                                    if (gtaSymbols_.cpedSetCharCreatedByFn) {
+                                        gtaSymbols_.cpedSetCharCreatedByFn(drv, 2 /*MISSION_CHAR*/);
+                                    }
+                                    // Eliminar CTaskComplexCarDrive (slot 3) para que el conductor permanezca sentado
+                                    // sin agotar CTaskPool (500 slots) ni intentar conducir por su cuenta en el Guest
+                                    uintptr_t drvIntel = *reinterpret_cast<uintptr_t*>(reinterpret_cast<uintptr_t>(drv) + 0x538);
+                                    if (drvIntel != 0 && gtaSymbols_.ctaskManagerSetTaskFn) {
+                                        gtaSymbols_.ctaskManagerSetTaskFn(reinterpret_cast<void*>(drvIntel + 8), nullptr, 3, false);
+                                    }
                                 }
                             }
                             *reinterpret_cast<uint8_t*>(newVehAddr + 0x610) = 2; // MISSION_VEHICLE
@@ -1586,16 +1629,9 @@ public:
                 }
 
                 if (wVeh && wVeh != myVeh) {
+                    worldSyncVehHostSlot_[v] = ve.hostPoolSlot;
                     uintptr_t wVehAddr = reinterpret_cast<uintptr_t>(wVeh);
                     *reinterpret_cast<float*>(wVehAddr + 0x634) = 1000.0f; // m_fHealth
-                    if (ve.driverModelId > 0 && *reinterpret_cast<void**>(wVehAddr + 0x5a0) == nullptr && gtaSymbols_.cvehicleSetUpDriverFn) {
-                        *reinterpret_cast<uint8_t*>(wVehAddr + 0x610) = 1;
-                        void* drv = gtaSymbols_.cvehicleSetUpDriverFn(wVeh, 0, false, false);
-                        if (drv && gtaSymbols_.cpedSetCharCreatedByFn) {
-                            gtaSymbols_.cpedSetCharCreatedByFn(drv, 2 /*MISSION_CHAR*/);
-                        }
-                        *reinterpret_cast<uint8_t*>(wVehAddr + 0x610) = 2;
-                    }
                     applySmoothVehicleTransform(wVeh, ve);
                 }
             }
