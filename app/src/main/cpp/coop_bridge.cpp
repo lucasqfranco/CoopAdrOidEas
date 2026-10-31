@@ -987,6 +987,38 @@ public:
 #endif
     }
 
+    void evictNpcPedFromWorld(void* ped, void* localPed) {
+#if defined(__unix__) || defined(__ANDROID__) || defined(__linux__)
+        if (!ped || ped == localPed) return;
+        for (int r = 0; r < kMaxCoopPlayers; ++r) {
+            if (ped == remotePedPtr_[r]) return;
+        }
+        uintptr_t pedAddr = reinterpret_cast<uintptr_t>(ped);
+        if ((*reinterpret_cast<uint8_t*>(pedAddr + 0x585) & 1) != 0) {
+            warpPedOutOfVehicle(ped);
+        }
+        if (gtaSymbols_.cpedSetCharCreatedByFn) {
+            gtaSymbols_.cpedSetCharCreatedByFn(ped, 1 /*RANDOM_CHAR*/);
+        }
+        *reinterpret_cast<float*>(pedAddr + 0x6ac) = 0.0f; // m_fHealth = 0 para excluirlo del escaneo y liberar pool
+        uintptr_t mat = *reinterpret_cast<uintptr_t*>(pedAddr + 0x18);
+        if (mat != 0 && gtaSymbols_.cworldRemoveFn && gtaSymbols_.cworldAddFn) {
+            gtaSymbols_.cworldRemoveFn(ped);
+            *reinterpret_cast<float*>(mat + 0x30) = 0.0f;
+            *reinterpret_cast<float*>(mat + 0x34) = 0.0f;
+            *reinterpret_cast<float*>(mat + 0x38) = -500.0f;
+            *reinterpret_cast<float*>(pedAddr + 0x08) = 0.0f;
+            *reinterpret_cast<float*>(pedAddr + 0x0c) = 0.0f;
+            *reinterpret_cast<float*>(pedAddr + 0x10) = -500.0f;
+            if (gtaSymbols_.centityUpdateRwFrameFn) gtaSymbols_.centityUpdateRwFrameFn(ped);
+            gtaSymbols_.cworldAddFn(ped);
+        }
+        if (gtaSymbols_.cpedTeleportFn) {
+            gtaSymbols_.cpedTeleportFn(ped, CVector{0.0f, 0.0f, -500.0f}, 0);
+        }
+#endif
+    }
+
     void warpPedIntoVehicleDriver(void* ped, void* veh, void* localPed, bool isCoopPlayer = false) {
 #if defined(__unix__) || defined(__ANDROID__) || defined(__linux__)
         if (!ped || !veh) return;
@@ -1002,10 +1034,10 @@ public:
             for (int r = 0; r < kMaxCoopPlayers; ++r) {
                 if (curDrv == remotePedPtr_[r]) isRemPlayer = true;
             }
-            warpPedOutOfVehicle(curDrv);
-            if (!isRemPlayer) {
-                if (gtaSymbols_.cpedSetCharCreatedByFn) gtaSymbols_.cpedSetCharCreatedByFn(curDrv, 1);
-                if (gtaSymbols_.cpedTeleportFn) gtaSymbols_.cpedTeleportFn(curDrv, CVector{0.0f, 0.0f, -500.0f}, 0);
+            if (isRemPlayer) {
+                warpPedOutOfVehicle(curDrv);
+            } else {
+                evictNpcPedFromWorld(curDrv, localPed);
             }
         }
         if ((*reinterpret_cast<uint8_t*>(pedAddr + 0x585) & 1) != 0) {
@@ -1044,10 +1076,10 @@ public:
             for (int r = 0; r < kMaxCoopPlayers; ++r) {
                 if (curPass == remotePedPtr_[r]) isRemPlayer = true;
             }
-            warpPedOutOfVehicle(curPass);
-            if (!isRemPlayer) {
-                if (gtaSymbols_.cpedSetCharCreatedByFn) gtaSymbols_.cpedSetCharCreatedByFn(curPass, 1);
-                if (gtaSymbols_.cpedTeleportFn) gtaSymbols_.cpedTeleportFn(curPass, CVector{0.0f, 0.0f, -500.0f}, 0);
+            if (isRemPlayer) {
+                warpPedOutOfVehicle(curPass);
+            } else {
+                evictNpcPedFromWorld(curPass, localPed);
             }
         }
         if ((*reinterpret_cast<uint8_t*>(pedAddr + 0x585) & 1) != 0) {
@@ -1084,10 +1116,10 @@ public:
                 for (int r = 0; r < kMaxCoopPlayers; ++r) {
                     if (occ == remotePedPtr_[r]) isRemPlayer = true;
                 }
-                warpPedOutOfVehicle(occ);
-                if (!isRemPlayer) {
-                    if (gtaSymbols_.cpedSetCharCreatedByFn) gtaSymbols_.cpedSetCharCreatedByFn(occ, 1);
-                    if (gtaSymbols_.cpedTeleportFn) gtaSymbols_.cpedTeleportFn(occ, CVector{0.0f, 0.0f, -500.0f}, 0);
+                if (isRemPlayer) {
+                    warpPedOutOfVehicle(occ);
+                } else {
+                    evictNpcPedFromWorld(occ, localPed);
                 }
             }
         }
@@ -1171,6 +1203,9 @@ public:
                 worldSyncVehHandle_[v] = -1;
                 worldSyncVehHostSlot_[v] = -1;
                 worldSyncVehModel_[v] = -1;
+                worldSyncVehDriverPtr_[v] = nullptr;
+                worldSyncVehDriverHandle_[v] = -1;
+                worldSyncVehHadDriver_[v] = false;
             }
             return;
         }
@@ -1196,6 +1231,9 @@ public:
                 worldSyncVehHandle_[v] = -1;
                 worldSyncVehHostSlot_[v] = -1;
                 worldSyncVehModel_[v] = -1;
+                worldSyncVehDriverPtr_[v] = nullptr;
+                worldSyncVehDriverHandle_[v] = -1;
+                worldSyncVehHadDriver_[v] = false;
             }
             LOGI("Local Player CJ detected in world: CPlayerPed=%p", localPed);
         }
@@ -1279,26 +1317,25 @@ public:
         me.armor = std::isfinite(rawArmor) ? std::clamp(static_cast<int>(rawArmor), 0, 200) : 0;
         me.animId = static_cast<uint16_t>(std::clamp(localMoveState, 0, 12));
 
-        // Si el jugador local a pie intenta subir a un vehículo ya conducido por un compañero remoto,
-        // detectar cualquier tarea activa de entrada a vehículo (700/701/712/713 o slot 3) y subirlo como pasajero
+        // Detectar si el jugador local a pie tiene una tarea activa de entrada/robo de vehículo (700/701/712/713 o slot 3)
+        bool localTryingToEnterCar = false;
         if (!myVeh) {
             uintptr_t localIntel = *reinterpret_cast<uintptr_t*>(localPedAddr + 0x538);
-            bool tryingToEnterCar = false;
             if (localIntel != 0) {
                 void* taskMgr = reinterpret_cast<void*>(localIntel + 0x08);
                 void* primaryTask = *reinterpret_cast<void**>(localIntel + 0x08 + 3 * 8);
                 if (primaryTask != nullptr) {
-                    tryingToEnterCar = true;
+                    localTryingToEnterCar = true;
                 } else if (gtaSymbols_.ctaskManagerFindActiveTaskByTypeFn) {
                     if (gtaSymbols_.ctaskManagerFindActiveTaskByTypeFn(taskMgr, 701) ||
                         gtaSymbols_.ctaskManagerFindActiveTaskByTypeFn(taskMgr, 700) ||
                         gtaSymbols_.ctaskManagerFindActiveTaskByTypeFn(taskMgr, 713) ||
                         gtaSymbols_.ctaskManagerFindActiveTaskByTypeFn(taskMgr, 712)) {
-                        tryingToEnterCar = true;
+                        localTryingToEnterCar = true;
                     }
                 }
             }
-            if (tryingToEnterCar) {
+            if (localTryingToEnterCar) {
                 for (int r = 0; r < kMaxCoopPlayers; ++r) {
                     if (r == localIdx || !players_[r].isActive || players_[r].seatIndex != 0) continue;
                     void* partnerVeh = nullptr;
@@ -1615,13 +1652,21 @@ public:
                                 // +0x5a0 = CVehicle::m_pDriver en arm64 v2.10 (verificado en CVehicle::SetDriver 0x6a8250)
                                 void* pDriver = *reinterpret_cast<void**>(vAddr + 0x5a0);
                                 int16_t drvModel = -1;
-                                if (pDriver && pDriver != localPed) {
+                                float dxLoc = vxPos - myPos.x;
+                                float dyLoc = vyPos - myPos.y;
+                                bool hostCarjackingThisVeh = (localTryingToEnterCar && (dxLoc * dxLoc + dyLoc * dyLoc) < (7.5f * 7.5f));
+                                if (pDriver && pDriver != localPed && !hostCarjackingThisVeh) {
                                     bool isRemPlayer = false;
                                     for (int r = 0; r < kMaxCoopPlayers; ++r) {
-                                        if (pDriver == remotePedPtr_[r]) isRemPlayer = true;
+                                        if (pDriver == remotePedPtr_[r] ||
+                                            (players_[r].isActive && players_[r].seatIndex == 0 && players_[r].vehicleNetId == (1000 + s))) {
+                                            isRemPlayer = true;
+                                        }
                                     }
-                                    if (!isRemPlayer) {
-                                        drvModel = *reinterpret_cast<int16_t*>(reinterpret_cast<uintptr_t>(pDriver) + 0x32);
+                                    uintptr_t drvAddr = reinterpret_cast<uintptr_t>(pDriver);
+                                    bool drvStillInVeh = ((*reinterpret_cast<uint8_t*>(drvAddr + 0x585) & 1) != 0);
+                                    if (!isRemPlayer && drvStillInVeh) {
+                                        drvModel = *reinterpret_cast<int16_t*>(drvAddr + 0x32);
                                         if (drvModel <= 0) drvModel = 7;
                                     }
                                 }
@@ -1823,7 +1868,7 @@ public:
             }
 
             // 2. Instanciar y actualizar en el Guest los vehículos sincronizados desde el Host
-            //    (Sincronizando colores exactos +0x574 y conductor NPC en +0x5a0 fijado con SetPedPositionInCar)
+            //    (Sincronizando colores exactos +0x574 y conductor NPC único por vehículo sin duplicación al robarlo)
             for (int v = 0; v < kMaxSyncedWorldVehicles; ++v) {
                 const SyncedWorldVehicleEntry& ve = worldState_.vehicles[v];
                 bool validVehEntry = (ve.active != 0 && ve.modelId >= 400 && ve.modelId <= 611);
@@ -1835,6 +1880,9 @@ public:
                             std::swap(worldSyncVehHandle_[v], worldSyncVehHandle_[otherV]);
                             std::swap(worldSyncVehHostSlot_[v], worldSyncVehHostSlot_[otherV]);
                             std::swap(worldSyncVehModel_[v], worldSyncVehModel_[otherV]);
+                            std::swap(worldSyncVehDriverPtr_[v], worldSyncVehDriverPtr_[otherV]);
+                            std::swap(worldSyncVehDriverHandle_[v], worldSyncVehDriverHandle_[otherV]);
+                            std::swap(worldSyncVehHadDriver_[v], worldSyncVehHadDriver_[otherV]);
                             break;
                         }
                     }
@@ -1846,6 +1894,9 @@ public:
                         worldSyncVehPtr_[v] = nullptr;
                         worldSyncVehHandle_[v] = -1;
                         worldSyncVehModel_[v] = -1;
+                        worldSyncVehDriverPtr_[v] = nullptr;
+                        worldSyncVehDriverHandle_[v] = -1;
+                        worldSyncVehHadDriver_[v] = false;
                     }
                 }
 
@@ -1856,11 +1907,18 @@ public:
 
                 if (!validVehEntry || (wVeh && worldSyncVehModel_[v] != ve.modelId && wVeh != myVeh)) {
                     if (wVeh && wVeh != myVeh) {
+                        if (worldSyncVehDriverPtr_[v] && gtaSymbols_.cpoolsGetPedFn && worldSyncVehDriverHandle_[v] > 0 &&
+                            gtaSymbols_.cpoolsGetPedFn(worldSyncVehDriverHandle_[v]) == worldSyncVehDriverPtr_[v]) {
+                            evictNpcPedFromWorld(worldSyncVehDriverPtr_[v], localPed);
+                        }
                         evictVehicleFromWorld(wVeh, localPed);
                         wVeh = nullptr;
                         worldSyncVehPtr_[v] = nullptr;
                         worldSyncVehHandle_[v] = -1;
                         worldSyncVehModel_[v] = -1;
+                        worldSyncVehDriverPtr_[v] = nullptr;
+                        worldSyncVehDriverHandle_[v] = -1;
+                        worldSyncVehHadDriver_[v] = false;
                     }
                     if (!validVehEntry) continue;
                 }
@@ -1879,18 +1937,37 @@ public:
                             worldSyncVehHandle_[v] = gtaSymbols_.cpoolsGetVehicleRefFn ? gtaSymbols_.cpoolsGetVehicleRefFn(newVeh) : -1;
                             worldSyncVehHostSlot_[v] = ve.hostPoolSlot;
                             worldSyncVehModel_[v] = spawnVehModel;
+                            worldSyncVehDriverPtr_[v] = nullptr;
+                            worldSyncVehDriverHandle_[v] = -1;
+                            worldSyncVehHadDriver_[v] = false;
                             wVeh = newVeh;
                         }
                     }
                 }
 
                 if (wVeh) {
+                    if (worldSyncVehHostSlot_[v] != ve.hostPoolSlot) {
+                        if (worldSyncVehDriverPtr_[v] && gtaSymbols_.cpoolsGetPedFn && worldSyncVehDriverHandle_[v] > 0 &&
+                            gtaSymbols_.cpoolsGetPedFn(worldSyncVehDriverHandle_[v]) == worldSyncVehDriverPtr_[v]) {
+                            evictNpcPedFromWorld(worldSyncVehDriverPtr_[v], localPed);
+                        }
+                        worldSyncVehDriverPtr_[v] = nullptr;
+                        worldSyncVehDriverHandle_[v] = -1;
+                        worldSyncVehHadDriver_[v] = false;
+                    }
                     worldSyncVehHostSlot_[v] = ve.hostPoolSlot;
                     uintptr_t wVehAddr = reinterpret_cast<uintptr_t>(wVeh);
                     *reinterpret_cast<float*>(wVehAddr + 0x634) = 1000.0f; // m_fHealth
                     *reinterpret_cast<uint32_t*>(wVehAddr + 0x574) = ve.packedColors; // Mantener color idéntico al Host
 
-                    // Garantizar que todo vehículo NPC en movimiento tenga su conductor visible sentado al volante en el Guest
+                    uintptr_t wvMat = *reinterpret_cast<uintptr_t*>(wVehAddr + 0x18);
+                    float wvx = wvMat ? *reinterpret_cast<float*>(wvMat + 0x30) : ve.x;
+                    float wvy = wvMat ? *reinterpret_cast<float*>(wvMat + 0x34) : ve.y;
+                    float dxLoc = wvx - myPos.x;
+                    float dyLoc = wvy - myPos.y;
+                    bool localCarjackingThisVeh = (localTryingToEnterCar && (dxLoc * dxLoc + dyLoc * dyLoc) < (8.5f * 8.5f));
+
+                    // Garantizar que todo vehículo NPC tenga a lo sumo 1 conductor instanciado (nunca re-spawnear tras ser bajado)
                     if (wVeh != myVeh) {
                         bool remDrivingThisVeh = false;
                         for (int r = 0; r < kMaxCoopPlayers; ++r) {
@@ -1901,7 +1978,8 @@ public:
                             }
                         }
                         void* curDrv = *reinterpret_cast<void**>(wVehAddr + 0x5a0);
-                        if (!remDrivingThisVeh && ve.driverModelId > 0 && curDrv == nullptr) {
+                        if (!remDrivingThisVeh && !localCarjackingThisVeh && !worldSyncVehHadDriver_[v] &&
+                            ve.driverModelId > 0 && curDrv == nullptr) {
                             if (canRequestStreamingThisTick && gtaSymbols_.cstreamingRequestModelFn &&
                                 !gtaSymbols_.isModelLoaded(ve.driverModelId)) {
                                 gtaSymbols_.cstreamingRequestModelFn(ve.driverModelId, 2);
@@ -1928,6 +2006,9 @@ public:
                                     *reinterpret_cast<float*>(drvAddr + 0x6b0) = 100.0f;
                                     gtaSymbols_.cworldAddFn(drv);
                                     warpPedIntoVehicleDriver(drv, wVeh, localPed, false);
+                                    worldSyncVehDriverPtr_[v] = drv;
+                                    worldSyncVehDriverHandle_[v] = gtaSymbols_.cpoolsGetPedRefFn ? gtaSymbols_.cpoolsGetPedRefFn(drv) : -1;
+                                    worldSyncVehHadDriver_[v] = true;
                                 }
                             }
                         } else if ((ve.driverModelId <= 0 || remDrivingThisVeh) && curDrv != nullptr && curDrv != localPed) {
@@ -1936,20 +2017,22 @@ public:
                                 if (curDrv == remotePedPtr_[r]) isRemPlayer = true;
                             }
                             if (!isRemPlayer) {
-                                warpPedOutOfVehicle(curDrv);
-                                if (gtaSymbols_.cpedSetCharCreatedByFn) {
-                                    gtaSymbols_.cpedSetCharCreatedByFn(curDrv, 1 /*RANDOM_CHAR*/);
-                                }
-                                if (gtaSymbols_.cpedTeleportFn) {
-                                    gtaSymbols_.cpedTeleportFn(curDrv, CVector{0.0f, 0.0f, -500.0f}, 0);
-                                }
+                                evictNpcPedFromWorld(curDrv, localPed);
+                                worldSyncVehDriverPtr_[v] = nullptr;
+                                worldSyncVehDriverHandle_[v] = -1;
                             }
+                        } else if (localCarjackingThisVeh && worldSyncVehHadDriver_[v] && curDrv == nullptr) {
+                            // El jugador local (Guest) acaba de bajar al conductor de este vehículo para subir:
+                            // reclamar inmediatamente el vehículo ante el Host para que el Host retire a su conductor NPC
+                            me.seatIndex = 0;
+                            me.vehicleNetId = 1000 + static_cast<int32_t>(ve.hostPoolSlot);
+                            me.vehicleModelId = ve.modelId;
                         }
                     }
 
-                    // Si el vehículo es nuestro pero somos pasajeros (me.seatIndex > 0) o no estamos en él,
+                    // Si el vehículo es nuestro pero somos pasajeros (me.seatIndex > 0) o no estamos en él (ni robándolo),
                     // aplicar la posición sincronizada del Host/conductor
-                    if (wVeh != myVeh || me.seatIndex > 0) {
+                    if ((wVeh != myVeh && !localCarjackingThisVeh) || me.seatIndex > 0) {
                         applySmoothVehicleTransform(wVeh, ve);
                     }
                 }
@@ -2166,9 +2249,6 @@ public:
                         void* currentDrv = *reinterpret_cast<void**>(tvAddr + 0x5a0);
                         if (rem.seatIndex == 0 && currentDrv != localPed) {
                             if (!remCurrentlyInVeh || remCurrentVeh != targetVeh || currentDrv != ped) {
-                                if (currentDrv && currentDrv != ped && currentDrv != localPed) {
-                                    warpPedOutOfVehicle(currentDrv);
-                                }
                                 if (remCurrentlyInVeh && remCurrentVeh != targetVeh) {
                                     warpPedOutOfVehicle(ped);
                                 }
@@ -3354,6 +3434,9 @@ private:
     int worldSyncVehHandle_[kMaxSyncedWorldVehicles] = {-1, -1, -1, -1, -1};
     int16_t worldSyncVehHostSlot_[kMaxSyncedWorldVehicles] = {-1, -1, -1, -1, -1};
     int16_t worldSyncVehModel_[kMaxSyncedWorldVehicles] = {-1, -1, -1, -1, -1};
+    void* worldSyncVehDriverPtr_[kMaxSyncedWorldVehicles] = {nullptr};
+    int worldSyncVehDriverHandle_[kMaxSyncedWorldVehicles] = {-1, -1, -1, -1, -1};
+    bool worldSyncVehHadDriver_[kMaxSyncedWorldVehicles] = {false};
 
 #if defined(__unix__) || defined(__ANDROID__) || defined(__linux__)
     std::vector<PeerEndpoint> activePeers_;
