@@ -48,6 +48,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.model.CharacterSkin
 import com.example.model.NetworkConnectionMode
+import com.example.model.PlayerMarkerColor
 import com.example.ui.theme.ArmorBlue
 import com.example.ui.theme.BebasNeueFontFamily
 import com.example.ui.theme.DarkSurfaceElevated
@@ -362,6 +363,46 @@ fun LobbyScreen(
                                 fontFamily = BebasNeueFontFamily,
                                 fontSize = 13.sp,
                                 color = if (selected) Color.Black else Color.LightGray
+                            )
+                        }
+                    }
+                }
+                Spacer(modifier = Modifier.height(12.dp))
+                Text(
+                    text = "COLOR DE TU FLECHA / MARCADOR: ${modStatus.myMarkerColor.displayName.uppercase()}",
+                    fontFamily = BebasNeueFontFamily,
+                    fontSize = 14.sp,
+                    color = Color.LightGray
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+                FlowRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    PlayerMarkerColor.entries.forEach { markerColor ->
+                        val selected = modStatus.myMarkerColor == markerColor
+                        val chipColor = Color(markerColor.colorHex)
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(if (selected) chipColor.copy(alpha = 0.28f) else Color(0xFF141E17))
+                                .clickable { viewModel.changeMyMarkerColor(markerColor) }
+                                .padding(horizontal = 9.dp, vertical = 5.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(10.dp)
+                                    .clip(CircleShape)
+                                    .background(chipColor)
+                            )
+                            Spacer(modifier = Modifier.width(5.dp))
+                            Text(
+                                text = markerColor.displayName,
+                                fontFamily = BebasNeueFontFamily,
+                                fontSize = 12.sp,
+                                color = if (selected) chipColor else Color.LightGray
                             )
                         }
                     }

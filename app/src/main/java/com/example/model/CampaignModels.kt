@@ -76,6 +76,16 @@ enum class CharacterSkin(val displayName: String, val tag: String, val avatarCol
     CATALINA("Catalina", "Fern Ridge Outlaw", 0xFFDC2626)
 }
 
+enum class PlayerMarkerColor(val radarColorId: Int, val displayName: String, val colorHex: Long) {
+    GREEN(1, "Verde", 0xFF22C55E),
+    RED(0, "Rojo", 0xFFEF4444),
+    BLUE(2, "Azul", 0xFF38BDF8),
+    YELLOW(4, "Amarillo", 0xFFEAB308),
+    PURPLE(5, "Morado", 0xFFA855F7),
+    CYAN(6, "Celeste", 0xFF06B6D4),
+    WHITE(3, "Blanco", 0xFFF8FAFC)
+}
+
 enum class PlayerCoopRole(val title: String, val icon: String, val description: String) {
     DRIVER("Driver / Wheelman", "🚗", "Navigates escapes, high-speed chases, and vehicle evasions"),
     GUNNER("Drive-By Gunner", "🎯", "Target acquisition, passenger shooting, and heavy combat"),

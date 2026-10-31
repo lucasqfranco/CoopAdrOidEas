@@ -8,6 +8,7 @@ import androidx.core.content.FileProvider
 import com.example.bridge.CoopNativeBridge
 import com.example.model.CharacterSkin
 import com.example.model.NetworkConnectionMode
+import com.example.model.PlayerMarkerColor
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -47,6 +48,7 @@ data class ModInstallationStatus(
     val roomCode: String = "GROVE-404",
     val networkConnectionMode: NetworkConnectionMode = NetworkConnectionMode.LAN_WIFI,
     val mySelectedSkin: CharacterSkin = CharacterSkin.CJ,
+    val myMarkerColor: PlayerMarkerColor = PlayerMarkerColor.GREEN,
     val partnerSkin: CharacterSkin = CharacterSkin.SWEET,
     val player3Skin: CharacterSkin = CharacterSkin.RYDER,
     val player4Skin: CharacterSkin = CharacterSkin.BIG_SMOKE,
@@ -557,6 +559,13 @@ class ModFileManager(private val context: Context) {
         }
     }
 
+    fun setMyMarkerColor(color: PlayerMarkerColor) {
+        _status.value = _status.value.copy(myMarkerColor = color)
+        if (_status.value.isModInstalled) {
+            writeConfigIni()
+        }
+    }
+
     fun setPartnerSkin(skin: CharacterSkin) {
         _status.value = _status.value.copy(partnerSkin = skin)
         if (_status.value.isModInstalled) {
@@ -629,8 +638,15 @@ class ModFileManager(private val context: Context) {
     }
 
     fun setHostDeviceMode(isHost: Boolean) {
+        val currentColor = _status.value.myMarkerColor
+        val nextColor = when {
+            isHost && currentColor == PlayerMarkerColor.RED -> PlayerMarkerColor.GREEN
+            !isHost && currentColor == PlayerMarkerColor.GREEN -> PlayerMarkerColor.RED
+            else -> currentColor
+        }
         _status.value = _status.value.copy(
             isHostDevice = isHost,
+            myMarkerColor = nextColor,
             connectionMode = if (isHost) "Wi-Fi LAN P2P (Host)" else "Wi-Fi LAN P2P (Invitado)"
         )
         if (_status.value.isModInstalled) {
@@ -842,6 +858,7 @@ class ModFileManager(private val context: Context) {
             [PLAYER_IDENTITY]
             Player1_Skin_ID = ${getSkinModelId(_status.value.mySelectedSkin)}
             Player1_Name = ${_status.value.mySelectedSkin.displayName}
+            Player_Marker_Color = ${_status.value.myMarkerColor.radarColorId}
             Player2_Skin_ID = ${getSkinModelId(_status.value.partnerSkin)}
             Player2_Name = ${_status.value.partnerSkin.displayName}
             Player3_Skin_ID = ${getSkinModelId(_status.value.player3Skin)}
@@ -897,6 +914,7 @@ class ModFileManager(private val context: Context) {
             player_slot = ${if (isHost) 1 else 2}
             max_players = ${_status.value.maxPlayers}
             skin_id = ${getSkinModelId(_status.value.mySelectedSkin)}
+            marker_color = ${_status.value.myMarkerColor.radarColorId}
             partner_skin_id = ${getSkinModelId(_status.value.partnerSkin)}
             player3_skin_id = ${getSkinModelId(_status.value.player3Skin)}
             player4_skin_id = ${getSkinModelId(_status.value.player4Skin)}

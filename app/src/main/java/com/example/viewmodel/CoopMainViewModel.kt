@@ -15,6 +15,7 @@ import com.example.model.GameEdition
 import com.example.model.Mission
 import com.example.model.NetworkConnectionMode
 import com.example.model.PlayerCoopRole
+import com.example.model.PlayerMarkerColor
 import com.example.model.RadioFilterEffect
 import com.example.model.TacticalPingType
 import com.example.model.VoiceTransmissionMode
@@ -280,6 +281,11 @@ class CoopMainViewModel(application: Application) : AndroidViewModel(application
         coopNetworkManager.updateMySkin(skin)
         modFileManager.setMySkin(skin)
         showNotification("Skin seleccionado: ${skin.displayName}")
+    }
+
+    fun changeMyMarkerColor(color: PlayerMarkerColor) {
+        modFileManager.setMyMarkerColor(color)
+        showNotification("Color de flecha: ${color.displayName}")
     }
 
     fun toggleReady() {
