@@ -160,7 +160,7 @@ class ModFileManager(private val context: Context) {
      */
     fun ensureAllFilesAccessPermission(): Boolean {
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
-            if (!Environment.isExternalStorageManager()) {
+            if (!(try { Environment.isExternalStorageManager() } catch (_: Throwable) { true })) {
                 try {
                     val intent = Intent(
                         android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
