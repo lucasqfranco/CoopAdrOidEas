@@ -63,17 +63,63 @@ enum class NetworkConnectionMode(val title: String, val shortLabel: String, val 
     )
 }
 
-enum class CharacterSkin(val displayName: String, val tag: String, val avatarColorHex: Long) {
-    CJ("Carl 'CJ' Johnson", "Grove Street", 0xFF22C55E),
-    SWEET("Sean 'Sweet' Johnson", "Grove Boss", 0xFF15803D),
-    RYDER("Lance 'Ryder' Wilson", "Old School Grove", 0xFF166534),
-    BIG_SMOKE("Melvin 'Big Smoke'", "Front Street", 0xFFEAB308),
-    CESAR("Cesar Vialpando", "Varrios Los Aztecas", 0xFF0284C7),
-    KENDL("Kendl Johnson", "Families Diplomat", 0xFFEC4899),
-    THE_TRUTH("The Truth", "Badlands Mystic", 0xFF84CC16),
-    WU_ZI_MU("Wu Zi Mu 'Woozie'", "Mountain Cloud Boys", 0xFF6366F1),
-    MIKE_TORENO("Mike Toreno", "Undercover Agent", 0xFF64748B),
-    CATALINA("Catalina", "Fern Ridge Outlaw", 0xFFDC2626)
+enum class SkinCategory(val title: String) {
+    PROTAGONISTS("Protagonistas y Aliados"),
+    GANGS("Pandillas"),
+    FORCES_VILLAINS("Fuerzas y Villanos")
+}
+
+enum class CharacterSkin(
+    val displayName: String,
+    val tag: String,
+    val avatarColorHex: Long,
+    val modelId: Int,
+    val pedFallbackModelId: Int = modelId,
+    val category: SkinCategory = SkinCategory.PROTAGONISTS
+) {
+    // Protagonistas y Aliados
+    CJ("Carl 'CJ' Johnson", "Grove Street", 0xFF22C55E, 0, 0, SkinCategory.PROTAGONISTS),
+    SWEET("Sean 'Sweet' Johnson", "Grove Boss", 0xFF15803D, 270, 105, SkinCategory.PROTAGONISTS),
+    RYDER("Lance 'Ryder' Wilson", "Old School Grove", 0xFF166534, 271, 106, SkinCategory.PROTAGONISTS),
+    BIG_SMOKE("Melvin 'Big Smoke'", "Front Street", 0xFFEAB308, 269, 149, SkinCategory.PROTAGONISTS),
+    BIG_SMOKE_VEST("Big Smoke Chaleco", "Crack Palace", 0xFFCA8A04, 149, 149, SkinCategory.PROTAGONISTS),
+    CESAR("Cesar Vialpando", "Varrios Los Aztecas", 0xFF0284C7, 292, 115, SkinCategory.PROTAGONISTS),
+    WU_ZI_MU("Wu Zi Mu 'Woozie'", "Mountain Cloud Boys", 0xFF6366F1, 294, 118, SkinCategory.PROTAGONISTS),
+    THE_TRUTH("The Truth", "Badlands Mystic", 0xFF84CC16, 1, 1, SkinCategory.PROTAGONISTS),
+    MIKE_TORENO("Mike Toreno", "Undercover Agent", 0xFF64748B, 295, 165, SkinCategory.PROTAGONISTS),
+    CATALINA("Catalina", "Fern Ridge Outlaw", 0xFFDC2626, 298, 193, SkinCategory.PROTAGONISTS),
+    KENDL("Kendl Johnson", "Families Diplomat", 0xFFEC4899, 193, 193, SkinCategory.PROTAGONISTS),
+    CLAUDE_SPEED("Claude Speed", "GTA III Legend", 0xFF334155, 299, 100, SkinCategory.PROTAGONISTS),
+    ZERO("Zero", "RC Shop Nerd", 0xFF0EA5E9, 289, 170, SkinCategory.PROTAGONISTS),
+    OG_LOC("OG Loc", "Burger Shot Rapper", 0xFFF97316, 293, 107, SkinCategory.PROTAGONISTS),
+    MADD_DOGG("Madd Dogg", "Los Santos Rapper", 0xFFD97706, 297, 22, SkinCategory.PROTAGONISTS),
+    MACCER("Maccer", "The Gurning Chimps", 0xFFA855F7, 2, 2, SkinCategory.PROTAGONISTS),
+    KENT_PAUL("Kent Paul", "Music Manager", 0xFF38BDF8, 291, 29, SkinCategory.PROTAGONISTS),
+    KEN_ROSENBERG("Ken Rosenberg", "Caligula's Lawyer", 0xFFF43F5E, 290, 187, SkinCategory.PROTAGONISTS),
+
+    // Pandillas
+    HOMIE_GROVE_1("Homie Grove 1", "Grove Street", 0xFF22C55E, 105, 105, SkinCategory.GANGS),
+    HOMIE_GROVE_2("Homie Grove 2", "Grove Street", 0xFF16A34A, 106, 106, SkinCategory.GANGS),
+    HOMIE_GROVE_3("Homie Grove 3", "Grove Street", 0xFF15803D, 107, 107, SkinCategory.GANGS),
+    BALLAS_1("Ballas 1", "Rollin Heights", 0xFF9333EA, 102, 102, SkinCategory.GANGS),
+    BALLAS_2("Ballas 2", "Front Yard Ballas", 0xFF7E22CE, 103, 103, SkinCategory.GANGS),
+    VAGOS_1("Vagos 1", "Los Santos Vagos", 0xFFFACC15, 108, 108, SkinCategory.GANGS),
+    AZTECA_1("Azteca 1", "Varrios Los Aztecas", 0xFF06B6D4, 114, 114, SkinCategory.GANGS),
+    TRIAD("Triad", "San Fierro Triads", 0xFFEF4444, 117, 117, SkinCategory.GANGS),
+    DA_NANG_BOY("Da Nang Boy", "Da Nang Boys", 0xFF84CC16, 121, 121, SkinCategory.GANGS),
+    MAFIA_RUSA("Mafia Rusa", "Russian Mafia", 0xFF94A3B8, 111, 111, SkinCategory.GANGS),
+    BIKER("Biker", "San Andreas Bikers", 0xFF78350F, 100, 100, SkinCategory.GANGS),
+
+    // Fuerzas y Villanos
+    TENPENNY("Tenpenny", "C.R.A.S.H.", 0xFF1E3A8A, 265, 280, SkinCategory.FORCES_VILLAINS),
+    PULASKI("Pulaski", "C.R.A.S.H.", 0xFF1D4ED8, 266, 280, SkinCategory.FORCES_VILLAINS),
+    HERNANDEZ("Hernandez", "C.R.A.S.H.", 0xFF2563EB, 267, 280, SkinCategory.FORCES_VILLAINS),
+    LSPD_COP("Policía LSPD", "Los Santos PD", 0xFF3B82F6, 280, 280, SkinCategory.FORCES_VILLAINS),
+    SWAT_TACTICAL("SWAT Táctico", "Fuerzas Especiales", 0xFF0F172A, 285, 285, SkinCategory.FORCES_VILLAINS),
+    FBI_AGENT("Agente FBI", "Federal Agent", 0xFF1E293B, 286, 286, SkinCategory.FORCES_VILLAINS),
+    ARMY_SOLDIER("Soldado Ejército", "Area 69 Military", 0xFF3F6212, 287, 287, SkinCategory.FORCES_VILLAINS),
+    PARAMEDIC("Médico", "Los Santos EMS", 0xFFEF4444, 274, 274, SkinCategory.FORCES_VILLAINS),
+    FIREFIGHTER("Bombero", "LSFD Rescue", 0xFFF97316, 277, 277, SkinCategory.FORCES_VILLAINS)
 }
 
 enum class PlayerMarkerColor(val radarColorId: Int, val displayName: String, val colorHex: Long) {

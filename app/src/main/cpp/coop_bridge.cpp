@@ -633,6 +633,7 @@ struct BridgeConfig {
     int32_t maxPlayers = 4;
     int32_t cameraMode = 0;
     int32_t localMarkerColor = -1;
+    int32_t localSkinModelId = 0;
     bool allowIndependentVehicles = true;
     bool allowSharedVehicleDriveBy = true;
     bool freeRoamAnySave = true;
@@ -1431,6 +1432,25 @@ public:
             *reinterpret_cast<float*>(localPedAddr + 0x6b4) = 100.0f;
         }
 
+        // Aplicar Skin elegida al jugador local ($PLAYER_CHAR / FindPlayerPed(0)) si difiere del modelo actual
+        if (config_.localSkinModelId > 0) {
+            me.skinModelId = config_.localSkinModelId;
+        }
+        if (me.skinModelId > 0 && tickCount > 120 && myVeh == nullptr && !localTryingToEnterCar) {
+            int32_t targetLocalModel = resolveSafePedModelId(me.skinModelId);
+            int16_t curLocalModel = *reinterpret_cast<int16_t*>(localPedAddr + 0x32);
+            if (targetLocalModel > 0 && curLocalModel != targetLocalModel) {
+                if (!gtaSymbols_.isModelLoaded(targetLocalModel)) {
+                    if ((tickCount % 5 == 0) && gtaSymbols_.cstreamingRequestModelFn) {
+                        gtaSymbols_.cstreamingRequestModelFn(targetLocalModel, 2);
+                    }
+                } else if (gtaSymbols_.cpedSetModelIndexFn && localAppliedSkinModel_ != targetLocalModel) {
+                    gtaSymbols_.cpedSetModelIndexFn(localPed, static_cast<uint32_t>(targetLocalModel));
+                    localAppliedSkinModel_ = targetLocalModel;
+                }
+            }
+        }
+
         // ====================================================================
         // SINCRONIZACIÓN DE RELOJ (HORA), CLIMA, PEATONES Y VEHÍCULOS DEL MUNDO (HOST <-> GUEST)
         // ====================================================================
@@ -1450,7 +1470,9 @@ public:
                 me.y = targetY;
                 me.z = targetZ;
                 initialAlleyFreeRoamDone_ = true;
-                initialSyncTeleportDone_ = true;
+                if (config_.isHost) {
+                    initialSyncTeleportDone_ = true;
+                }
                 LOGI("Positioned %s CJ in open alley courtyard at (%.1f, %.1f, %.1f) facing +X!",
                      config_.isHost ? "HOST" : "GUEST", targetX, targetY, targetZ);
             }
@@ -2362,6 +2384,21 @@ public:
                 bool remCurrentlyInVeh = ((remPedFlags & 1) != 0);
                 void* remCurrentVeh = remCurrentlyInVeh ? *reinterpret_cast<void**>(remPedAddr + 0x708) : nullptr;
 
+                // Sincronizar modelo de skin del compañero remoto (si eligió skin distinta de CJ)
+                if (rem.skinModelId > 0 && !remCurrentlyInVeh) {
+                    int32_t targetRemModel = resolveSafePedModelId(rem.skinModelId);
+                    if (targetRemModel > 0 && remotePedSpawnedModel_[i] != targetRemModel) {
+                        if (!gtaSymbols_.isModelLoaded(targetRemModel)) {
+                            if ((tickCount % 5 == 0) && gtaSymbols_.cstreamingRequestModelFn) {
+                                gtaSymbols_.cstreamingRequestModelFn(targetRemModel, 2);
+                            }
+                        } else if (gtaSymbols_.cpedSetModelIndexFn) {
+                            gtaSymbols_.cpedSetModelIndexFn(ped, static_cast<uint32_t>(targetRemModel));
+                            remotePedSpawnedModel_[i] = targetRemModel;
+                        }
+                    }
+                }
+
                 if (rem.seatIndex >= 0) {
                     // Buscar el CVehicle compartido en el mundo local donde viaja el compañero remoto
                     void* targetVeh = nullptr;
@@ -2582,8 +2619,10 @@ public:
                     addConfiguredPeerLocked(myLocalIpNet);
                 }
 
-                // Enviar paquetes de sincronización 3D a 30 Hz (cada 33 ms) TANTO en HOST como en GUEST
-                if (nowMs - lastUnicastMs >= 33) {
+                // Enviar paquetes de sincronización 3D a 30 Hz (cada 33 ms) TANTO en HOST como en GUEST,
+                // o inmediatamente cuando un invitado envía PKT_HANDSHAKE (Join-in-Progress)
+                bool forceImmediateJoinSync = pendingJoinInProgressSync_.exchange(false);
+                if (forceImmediateJoinSync || (nowMs - lastUnicastMs >= 33)) {
                     lastUnicastMs = nowMs;
                     int mySlot = config_.localPlayerSlot;
                     PedSyncPacket pedPkt = buildPedSyncPacket(mySlot);
@@ -2856,6 +2895,14 @@ public:
                 if (hs->skinModelId >= 0) players_[idx].skinModelId = hs->skinModelId;
                 std::memcpy(players_[idx].playerName, hs->playerName, sizeof(players_[idx].playerName));
                 players_[idx].playerName[sizeof(players_[idx].playerName) - 1] = '\0';
+                if (config_.isHost) {
+                    if (players_[0].hasRealGtaCoords) {
+                        players_[idx].x = players_[0].x + 1.5f * static_cast<float>(idx);
+                        players_[idx].y = players_[0].y;
+                        players_[idx].z = players_[0].z;
+                    }
+                    pendingJoinInProgressSync_.store(true);
+                }
                 packetsProcessed_.fetch_add(1);
                 return true;
             }
@@ -3542,12 +3589,47 @@ private:
         else if (key == "Camera_Mode") config_.cameraMode = std::atoi(val.c_str());
         else if (key == "Allow_Independent_Vehicles") config_.allowIndependentVehicles = (std::atoi(val.c_str()) == 1);
         else if (key == "Free_Roam_Any_Save") mission_.freeRoamAnySave = (std::atoi(val.c_str()) == 1);
-        else if (key == "Player1_Skin_ID") players_[0].skinModelId = std::atoi(val.c_str());
+        else if (key == "Player1_Skin_ID") {
+            players_[0].skinModelId = std::atoi(val.c_str());
+            if (config_.localPlayerSlot == 1) config_.localSkinModelId = players_[0].skinModelId;
+        }
         else if (key == "Player2_Skin_ID") players_[1].skinModelId = std::atoi(val.c_str());
         else if (key == "Player3_Skin_ID") players_[2].skinModelId = std::atoi(val.c_str());
         else if (key == "Player4_Skin_ID") players_[3].skinModelId = std::atoi(val.c_str());
+        else if (key == "Local_Skin_ID" || key == "skin_id") {
+            int sid = std::clamp(std::atoi(val.c_str()), 0, 299);
+            config_.localSkinModelId = sid;
+            int myIdx = std::clamp(config_.localPlayerSlot, 1, kMaxCoopPlayers) - 1;
+            players_[myIdx].skinModelId = sid;
+        }
         else if (key == "Player_Marker_Color" || key == "marker_color") {
             config_.localMarkerColor = std::clamp(std::atoi(val.c_str()), 0, 6);
+        }
+    }
+
+    static int32_t resolveSafePedModelId(int32_t modelId) {
+        if (modelId <= 0) return 0;
+        switch (modelId) {
+            case 1: return 7;     // The Truth -> male01 fallback if special slot unloaded
+            case 2: return 7;     // Maccer -> male01 fallback
+            case 265: return 280; // Tenpenny -> LAPD
+            case 266: return 280; // Pulaski -> LAPD
+            case 267: return 280; // Hernandez -> LAPD
+            case 269: return 149; // Big Smoke -> Smoke Vest (peds.ide)
+            case 270: return 105; // Sweet -> Grove Homie FAM1
+            case 271: return 106; // Ryder -> Grove Homie FAM2
+            case 289: return 170; // Zero -> SOMYST
+            case 290: return 187; // Ken Rosenberg -> SOFYBU
+            case 291: return 29;  // Kent Paul -> WMIDRUG
+            case 292: return 115; // Cesar -> Azteca VLA2
+            case 293: return 107; // OG Loc -> Grove FAM3
+            case 294: return 118; // Woozie -> Triad TRIADB
+            case 295: return 165; // Mike Toreno -> WMOMIB
+            case 297: return 22;  // Madd Dogg -> BMYST
+            case 298: return 193; // Catalina -> BFYPRO
+            case 299: return 100; // Claude Speed -> BIKERA
+            default:
+                return std::clamp(modelId, 0, 288);
         }
     }
 
@@ -3583,6 +3665,8 @@ private:
     std::atomic<int64_t> packetsProcessed_{0};
     std::atomic<int64_t> opcodesExecuted_{0};
     std::atomic<bool> pendingAntiSoftlock_{false};
+    std::atomic<bool> pendingJoinInProgressSync_{false};
+    int32_t localAppliedSkinModel_ = 0;
     std::thread udpWorkerThread_;
     GtaSaNativeSymbols gtaSymbols_;
     BridgeConfig config_;

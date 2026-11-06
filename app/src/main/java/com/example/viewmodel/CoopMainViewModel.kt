@@ -288,6 +288,13 @@ class CoopMainViewModel(application: Application) : AndroidViewModel(application
         showNotification("Color de flecha: ${color.displayName}")
     }
 
+    fun changeCustomSkinId(skinId: Int?) {
+        modFileManager.setCustomSkinId(skinId)
+        if (skinId != null) {
+            showNotification("ID de Skin personalizado fijado en: $skinId")
+        }
+    }
+
     fun toggleReady() {
         coopNetworkManager.toggleMyReady()
     }

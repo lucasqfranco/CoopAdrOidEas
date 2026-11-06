@@ -356,12 +356,87 @@ class CoopNetworkManager(private val scope: CoroutineScope) {
         return newCode
     }
 
+    private fun applyJoinInProgressStateIfHostActive(roomCode: String, hostIp: String) {
+        val hostTelem = CoopNativeBridge.getSlotTelemetry(1)
+        val (activeOnMission, activeMissionId, activeCp) = CoopNativeBridge.getActiveMissionState()
+        val hostPlayerInSession = _session.value.players.firstOrNull { it.isHost }
+        val hostX = hostTelem?.x ?: hostPlayerInSession?.posX ?: 2495.0f
+        val hostY = hostTelem?.y ?: hostPlayerInSession?.posY ?: -1687.0f
+        val hostZ = hostTelem?.z ?: hostPlayerInSession?.posZ ?: 13.5f
+        val isHostAlreadyInProgress = _session.value.status == SessionStatus.IN_PROGRESS ||
+                activeOnMission == 1 ||
+                (hostTelem != null && (hostTelem.x != 2495.0f || hostTelem.y != -1687.0f))
+
+        val resolvedMission = CampaignMissionRepository.getMissionById(activeMissionId) ?: _session.value.currentMission
+        val resolvedOnMission = if (_session.value.onMissionFlag != 0) _session.value.onMissionFlag else activeOnMission
+        val guestX = hostX + 1.5f
+        val guestY = hostY
+        val guestZ = hostZ
+
+        val updatedPlayers = if (_session.value.players.size >= 2) {
+            _session.value.players.mapIndexed { idx, p ->
+                if (p.isHost || idx == 0) {
+                    p.copy(posX = hostX, posY = hostY, posZ = hostZ)
+                } else {
+                    p.copy(posX = hostX + 1.5f * idx, posY = guestY, posZ = guestZ)
+                }
+            }
+        } else {
+            val hostP = (hostPlayerInSession ?: CoopPlayer(
+                id = "p_host",
+                name = "Anfitrión (Host)",
+                skin = CharacterSkin.CJ,
+                role = PlayerCoopRole.DRIVER,
+                isHost = true,
+                isReady = true
+            )).copy(posX = hostX, posY = hostY, posZ = hostZ)
+            val guestP = CoopPlayer(
+                id = "p2",
+                name = "Sean 'Sweet' (Tú - Join-in-Progress)",
+                skin = CharacterSkin.SWEET,
+                role = PlayerCoopRole.GUNNER,
+                isHost = false,
+                isReady = true,
+                posX = guestX,
+                posY = guestY,
+                posZ = guestZ,
+                seatIndex = 1
+            )
+            listOf(hostP, guestP)
+        }
+
+        CoopNativeBridge.updateLocalPlayer(
+            Player3DTelemetry(
+                slot = 2,
+                skinId = getSkinModelId(updatedPlayers.last().skin),
+                x = guestX,
+                y = guestY,
+                z = guestZ,
+                onMissionFlag = resolvedOnMission,
+                missionId = resolvedMission.id,
+                checkpointIndex = activeCp
+            )
+        )
+
+        _session.value = _session.value.copy(
+            roomCode = roomCode,
+            hostIpAddress = hostIp,
+            isConnectedToHost = true,
+            status = if (isHostAlreadyInProgress) SessionStatus.IN_PROGRESS else _session.value.status,
+            currentMission = resolvedMission,
+            currentCheckpointIndex = activeCp,
+            onMissionFlag = resolvedOnMission,
+            players = updatedPlayers
+        )
+    }
+
     fun joinRoom(code: String, hostIpInput: String? = null): Boolean {
         val cleanCode = code.trim().uppercase().ifBlank { _session.value.roomCode }
         val isOnlineMode = _session.value.networkMode == NetworkConnectionMode.ONLINE_REMOTE ||
                 (hostIpInput.isNullOrBlank() && _session.value.discoveredHostOnWifi == null && code.isNotBlank())
 
         if (isOnlineMode && (hostIpInput.isNullOrBlank() || _session.value.networkMode == NetworkConnectionMode.ONLINE_REMOTE)) {
+            applyJoinInProgressStateIfHostActive(cleanCode, "127.0.0.1")
             _session.value = _session.value.copy(
                 roomCode = cleanCode,
                 networkMode = NetworkConnectionMode.ONLINE_REMOTE,
@@ -379,6 +454,7 @@ class CoopNetworkManager(private val scope: CoroutineScope) {
             ?: _session.value.discoveredHostOnWifi?.ip
             ?: "192.168.1.100"
 
+        applyJoinInProgressStateIfHostActive(cleanCode, targetIp)
         connectToHost(targetIp, cleanCode)
         return true
     }
@@ -453,6 +529,45 @@ class CoopNetworkManager(private val scope: CoroutineScope) {
 
     private suspend fun handleIncomingControlLine(line: String, replyWriter: PrintWriter? = null) {
         when {
+            line.startsWith("JOIN_IN_PROGRESS_SYNC|") -> {
+                val parts = line.split("|")
+                val missionId = parts.getOrNull(1) ?: _session.value.currentMission.id
+                val cpIdx = parts.getOrNull(2)?.toIntOrNull() ?: 0
+                val onMission = parts.getOrNull(3)?.toIntOrNull() ?: 0
+                val hostX = parts.getOrNull(4)?.toFloatOrNull() ?: 2495.0f
+                val hostY = parts.getOrNull(5)?.toFloatOrNull() ?: -1687.0f
+                val hostZ = parts.getOrNull(6)?.toFloatOrNull() ?: 13.5f
+                val assignedSlot = parts.getOrNull(7)?.toIntOrNull() ?: 2
+                val missionObj = CampaignMissionRepository.getMissionById(missionId) ?: _session.value.currentMission
+                val guestX = hostX + 1.5f * (assignedSlot - 1)
+                CoopNativeBridge.syncMissionState(onMission, missionObj.id, cpIdx, hostX, hostY, hostZ)
+                CoopNativeBridge.updateLocalPlayer(
+                    Player3DTelemetry(
+                        slot = assignedSlot,
+                        x = guestX,
+                        y = hostY,
+                        z = hostZ,
+                        onMissionFlag = onMission,
+                        missionId = missionObj.id,
+                        checkpointIndex = cpIdx
+                    )
+                )
+                withContext(Dispatchers.Main) {
+                    val updated = _session.value.players.map { p ->
+                        if (p.isHost) p.copy(posX = hostX, posY = hostY, posZ = hostZ)
+                        else p.copy(posX = guestX, posY = hostY, posZ = hostZ)
+                    }
+                    _session.value = _session.value.copy(
+                        status = SessionStatus.IN_PROGRESS,
+                        currentMission = missionObj,
+                        currentCheckpointIndex = cpIdx,
+                        onMissionFlag = onMission,
+                        players = updated,
+                        connectionBannerMessage = "🚀 Join-in-Progress: Sincronizado con Host en ($hostX, $hostY, $hostZ) • Misión ${missionObj.title}"
+                    )
+                    onRemoteStartGameReceived?.invoke()
+                }
+            }
             line.startsWith("START_GAME") -> {
                 val parts = line.split("|")
                 val missionId = parts.getOrNull(2) ?: _session.value.currentMission.id
@@ -570,6 +685,12 @@ class CoopNetworkManager(private val scope: CoroutineScope) {
                     PlayerCoopRole.GUNNER
                 }
 
+                val hostRef = _session.value.players.firstOrNull { it.isHost }
+                val hostTelem = CoopNativeBridge.getSlotTelemetry(1)
+                val hostX = hostTelem?.x ?: hostRef?.posX ?: 2495.0f
+                val hostY = hostTelem?.y ?: hostRef?.posY ?: -1687.0f
+                val hostZ = hostTelem?.z ?: hostRef?.posZ ?: 13.5f
+
                 val slotNum = (_session.value.players.size + 1).coerceAtMost(8)
                 val newPlayer = CoopPlayer(
                     id = "p$slotNum",
@@ -585,9 +706,9 @@ class CoopNetworkManager(private val scope: CoroutineScope) {
                     isSpeaking = false,
                     currentWeapon = "AK-47 Rifle",
                     currentVehicle = "Greenwood Pasajero ${slotNum - 1} (Drive-By)",
-                    posX = 2495.0f + slotNum * 1.5f,
-                    posY = -1687.0f,
-                    posZ = 13.5f,
+                    posX = hostX + (slotNum - 1) * 1.5f,
+                    posY = hostY,
+                    posZ = hostZ,
                     seatIndex = (slotNum - 1).coerceIn(1, 3),
                     isDriveByActive = true
                 )
@@ -605,6 +726,12 @@ class CoopNetworkManager(private val scope: CoroutineScope) {
                 }
 
                 writer.println("WELCOME|${_session.value.roomCode}|Carl 'CJ'|FREEROAM:1|UDP:$UDP_COOP_TORNAMIC_PORT,$UDP_TELEMETRY_VOICE_PORT")
+                if (_session.value.status == SessionStatus.IN_PROGRESS) {
+                    writer.println(
+                        "JOIN_IN_PROGRESS_SYNC|${_session.value.currentMission.id}|${_session.value.currentCheckpointIndex}|${_session.value.onMissionFlag}|$hostX|$hostY|$hostZ|$slotNum"
+                    )
+                    sendTelemetryPacket(CoopNativeBridge.buildTelemetryPacket(1))
+                }
 
                 while (scope.isActive && !client.isClosed) {
                     val msg = reader.readLine() ?: break
@@ -1376,18 +1503,7 @@ class CoopNetworkManager(private val scope: CoroutineScope) {
     }
 
     private fun getSkinModelId(skin: CharacterSkin): Int {
-        return when (skin) {
-            CharacterSkin.CJ -> 0
-            CharacterSkin.SWEET -> 270
-            CharacterSkin.RYDER -> 271
-            CharacterSkin.BIG_SMOKE -> 269
-            CharacterSkin.CESAR -> 292
-            CharacterSkin.KENDL -> 193
-            CharacterSkin.THE_TRUTH -> 1
-            CharacterSkin.WU_ZI_MU -> 294
-            CharacterSkin.MIKE_TORENO -> 295
-            CharacterSkin.CATALINA -> 298
-        }
+        return skin.modelId
     }
 
     fun release() {

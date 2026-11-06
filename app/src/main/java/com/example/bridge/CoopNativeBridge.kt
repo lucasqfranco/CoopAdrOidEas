@@ -53,6 +53,13 @@ object CoopNativeBridge {
     @Volatile private var currentOnMissionFlag: Int = 0
     @Volatile private var currentMissionId: String = "ls_01"
     @Volatile private var currentCheckpointIndex: Int = 0
+    @Volatile private var cutsceneVotesMask: Int = 0
+    @Volatile private var lastSyncedWorldCheat: String = ""
+
+    fun getSlotTelemetry(slot: Int): Player3DTelemetry? = playerSlots[slot]
+
+    fun getActiveMissionState(): Triple<Int, String, Int> =
+        Triple(currentOnMissionFlag, currentMissionId, currentCheckpointIndex)
 
     init {
         try {
@@ -395,13 +402,59 @@ object CoopNativeBridge {
     }
 
     fun voteSkipCutscene(slot: Int = currentLocalSlot): Int {
+        val bit = 1 shl ((slot - 1).coerceIn(0, 3))
+        cutsceneVotesMask = cutsceneVotesMask or bit
         if (isNativeLoaded) {
             try {
                 return nativeVoteSkipCutscene(slot)
             } catch (_: Throwable) {}
         }
-        return 1 shl ((slot - 1).coerceIn(0, 3))
+        return cutsceneVotesMask
     }
+
+    fun resetCutsceneVotes() {
+        cutsceneVotesMask = 0
+    }
+
+    fun buildCutsceneSyncPacket(slot: Int = currentLocalSlot, cutsceneActive: Boolean = true): String {
+        val mask = voteSkipCutscene(slot)
+        return "PKT_CUTSCENE_SYNC|$slot|${if (cutsceneActive) 1 else 0}|$mask|$currentMissionId"
+    }
+
+    fun receiveCutsceneSyncPacket(packet: String): Int {
+        if (!packet.startsWith("PKT_CUTSCENE_SYNC|")) return cutsceneVotesMask
+        val parts = packet.trim().split("|")
+        val remoteMask = parts.getOrNull(3)?.toIntOrNull() ?: 0
+        cutsceneVotesMask = cutsceneVotesMask or remoteMask
+        return cutsceneVotesMask
+    }
+
+    fun buildWorldCheatSyncPacket(
+        slot: Int = currentLocalSlot,
+        cheatCode: String,
+        spawnedVehicleModelId: Int = 0
+    ): String {
+        val normalized = cheatCode.trim().uppercase(Locale.US)
+        val cat = classifyAndSyncCheat(normalized, slot)
+        if (cat == CheatSyncCategory.WORLD_SHARED) {
+            lastSyncedWorldCheat = normalized
+        }
+        return "PKT_WORLD_CHEAT_SYNC|$slot|$normalized|${cat.name}|$spawnedVehicleModelId"
+    }
+
+    fun receiveWorldCheatSyncPacket(packet: String): CheatSyncCategory? {
+        if (!packet.startsWith("PKT_WORLD_CHEAT_SYNC|")) return null
+        val parts = packet.trim().split("|")
+        val cheatCode = parts.getOrNull(2) ?: return null
+        val catName = parts.getOrNull(3) ?: return null
+        val cat = try { CheatSyncCategory.valueOf(catName) } catch (_: Exception) { CheatSyncCategory.WORLD_SHARED }
+        if (cat == CheatSyncCategory.WORLD_SHARED) {
+            lastSyncedWorldCheat = cheatCode
+        }
+        return cat
+    }
+
+    fun getLastSyncedWorldCheat(): String = lastSyncedWorldCheat
 
     fun setTacticalRespawnPoint(x: Float, y: Float, z: Float) {
         if (isNativeLoaded) {

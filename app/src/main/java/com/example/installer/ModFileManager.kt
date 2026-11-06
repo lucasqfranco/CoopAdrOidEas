@@ -6,6 +6,7 @@ import android.net.Uri
 import android.os.Environment
 import androidx.core.content.FileProvider
 import com.example.bridge.CoopNativeBridge
+import com.example.bridge.Player3DTelemetry
 import com.example.model.CharacterSkin
 import com.example.model.NetworkConnectionMode
 import com.example.model.PlayerMarkerColor
@@ -48,6 +49,7 @@ data class ModInstallationStatus(
     val roomCode: String = "GROVE-404",
     val networkConnectionMode: NetworkConnectionMode = NetworkConnectionMode.LAN_WIFI,
     val mySelectedSkin: CharacterSkin = CharacterSkin.CJ,
+    val customSkinId: Int? = null,
     val myMarkerColor: PlayerMarkerColor = PlayerMarkerColor.GREEN,
     val partnerSkin: CharacterSkin = CharacterSkin.SWEET,
     val player3Skin: CharacterSkin = CharacterSkin.RYDER,
@@ -553,9 +555,59 @@ class ModFileManager(private val context: Context) {
     }
 
     fun setMySkin(skin: CharacterSkin) {
-        _status.value = _status.value.copy(mySelectedSkin = skin)
+        _status.value = _status.value.copy(mySelectedSkin = skin, customSkinId = null)
+        syncLocalSkinToBridge()
         if (_status.value.isModInstalled) {
             writeConfigIni()
+        }
+    }
+
+    fun setCustomSkinId(skinId: Int?) {
+        val clamped = skinId?.coerceIn(0, 299)
+        val matchedEnum = if (clamped != null) {
+            CharacterSkin.entries.firstOrNull { it.modelId == clamped } ?: _status.value.mySelectedSkin
+        } else {
+            _status.value.mySelectedSkin
+        }
+        _status.value = _status.value.copy(
+            mySelectedSkin = matchedEnum,
+            customSkinId = clamped
+        )
+        syncLocalSkinToBridge()
+        if (_status.value.isModInstalled) {
+            writeConfigIni()
+        }
+    }
+
+    fun getEffectiveLocalSkinModelId(): Int {
+        return _status.value.customSkinId?.coerceIn(0, 299) ?: getSkinModelId(_status.value.mySelectedSkin)
+    }
+
+    fun getEffectivePedCompatibleModelId(): Int {
+        val custom = _status.value.customSkinId?.coerceIn(0, 299)
+        if (custom != null) {
+            val matched = CharacterSkin.entries.firstOrNull { it.modelId == custom }
+            return matched?.pedFallbackModelId ?: custom
+        }
+        return _status.value.mySelectedSkin.pedFallbackModelId
+    }
+
+    private fun syncLocalSkinToBridge() {
+        val effectiveSkinId = getEffectiveLocalSkinModelId()
+        val mySlot = if (_status.value.isHostDevice) 1 else 2
+        CoopNativeBridge.updateLocalPlayer(
+            Player3DTelemetry(
+                slot = mySlot,
+                skinId = effectiveSkinId
+            )
+        )
+        if (mySlot != 1) {
+            CoopNativeBridge.updateLocalPlayer(
+                Player3DTelemetry(
+                    slot = 1,
+                    skinId = effectiveSkinId
+                )
+            )
         }
     }
 
@@ -708,7 +760,12 @@ class ModFileManager(private val context: Context) {
             if (!sampLowerDir.exists()) sampLowerDir.mkdirs()
             writeSampSettingsIni(File(sampLowerDir, "settings.ini"))
 
-            // 4. Generar puente binario coop_telemetry.bin (sincronización compartida entre app, .so y .csa)
+            // 4. Sincronizar skin/config en memoria y generar puente binario coop_telemetry.bin
+            syncLocalSkinToBridge()
+            CoopNativeBridge.loadIniConfigs(
+                File(modDir, "coop_config.ini").absolutePath,
+                File(sampDir, "settings.ini").absolutePath
+            )
             CoopNativeBridge.writeTelemetryBinaryFile(File(modDir, "coop_telemetry.bin"))
 
             // 5. Extraer libCoopAndreasBridge.so desde context.applicationInfo.nativeLibraryDir (con respaldo en assets)
@@ -856,7 +913,8 @@ class ModFileManager(private val context: Context) {
             Custom_Opcodes_Range = 0D00-0D04
 
             [PLAYER_IDENTITY]
-            Player1_Skin_ID = ${getSkinModelId(_status.value.mySelectedSkin)}
+            Player1_Skin_ID = ${getEffectiveLocalSkinModelId()}
+            Local_Skin_ID = ${getEffectiveLocalSkinModelId()}
             Player1_Name = ${_status.value.mySelectedSkin.displayName}
             Player_Marker_Color = ${_status.value.myMarkerColor.radarColorId}
             Player2_Skin_ID = ${getSkinModelId(_status.value.partnerSkin)}
@@ -913,7 +971,7 @@ class ModFileManager(private val context: Context) {
             is_host = ${if (isHost) 1 else 0}
             player_slot = ${if (isHost) 1 else 2}
             max_players = ${_status.value.maxPlayers}
-            skin_id = ${getSkinModelId(_status.value.mySelectedSkin)}
+            skin_id = ${getEffectiveLocalSkinModelId()}
             marker_color = ${_status.value.myMarkerColor.radarColorId}
             partner_skin_id = ${getSkinModelId(_status.value.partnerSkin)}
             player3_skin_id = ${getSkinModelId(_status.value.player3Skin)}
@@ -937,6 +995,7 @@ class ModFileManager(private val context: Context) {
     private fun writeConfigIni() {
         val modDir = File(context.getExternalFilesDir(null), "CoopAndreas_Mod")
         if (!modDir.exists()) modDir.mkdirs()
+        syncLocalSkinToBridge()
         val iniFile = File(modDir, "coop_config.ini")
         writeConfigFile(iniFile)
         val cleoIniFile = File(File(modDir, "cleo"), "coop_config.ini")
@@ -945,6 +1004,14 @@ class ModFileManager(private val context: Context) {
         }
         val sampIni = File(File(modDir, "SAMP"), "settings.ini")
         writeSampSettingsIni(sampIni)
+        writeCompiledScmScript(File(modDir, "coop_andreas_main.csa"), "COOPMAN", scriptType = 3)
+        writeCompiledScmScript(File(modDir, "coop_spawner.csa"), "COOPSPW", scriptType = 3)
+        val cleoSubDir = File(modDir, "cleo")
+        if (cleoSubDir.exists()) {
+            writeCompiledScmScript(File(cleoSubDir, "coop_andreas_main.csa"), "COOPMAN", scriptType = 3)
+            writeCompiledScmScript(File(cleoSubDir, "coop_spawner.csa"), "COOPSPW", scriptType = 3)
+        }
+        CoopNativeBridge.loadIniConfigs(iniFile.absolutePath, sampIni.absolutePath)
         CoopNativeBridge.writeTelemetryBinaryFile(File(modDir, "coop_telemetry.bin"))
     }
 
@@ -1003,6 +1070,32 @@ class ModFileManager(private val context: Context) {
         writeU16(0x0002)
         baos.write(0x01)
         writeI32(-loopStartOffset)
+
+        // Secuencia SCM de skin local tras 0256 ($PLAYER_CHAR defined): 0247 (request_model), 038B (load_requested_models) y 09C7 (change_player_model)
+        val localSkinId = getEffectiveLocalSkinModelId()
+        val pedCompatId = getEffectivePedCompatibleModelId()
+        if (localSkinId > 0) {
+            writeU16(0x0256)
+            baos.write(0x02)
+            writeU16(0x0008)
+            if (localSkinId in 265..273 || localSkinId in 289..299) {
+                writeU16(0x023C) // load_special_actor
+                baos.write(0x04)
+                baos.write(0x01)
+                writeU16(0x0247) // request_model pedFallbackModelId
+                baos.write(0x05)
+                writeU16(pedCompatId)
+            }
+            writeU16(0x0247) // request_model localSkinId
+            baos.write(0x05)
+            writeU16(localSkinId)
+            writeU16(0x038B) // load_requested_models
+            writeU16(0x09C7) // change_player_model 0 to localSkinId
+            baos.write(0x04)
+            baos.write(0x00)
+            baos.write(0x05)
+            writeU16(localSkinId)
+        }
 
         // Tabla de opcodes extendidos sa_sbl_coopandreas (leída por libCoopAndreasBridge.so)
         when (scriptType) {
@@ -1344,19 +1437,8 @@ class ModFileManager(private val context: Context) {
         return Pair(destZip, destFolder)
     }
 
-    private fun getSkinModelId(skin: CharacterSkin): Int {
-        return when (skin) {
-            CharacterSkin.CJ -> 0
-            CharacterSkin.SWEET -> 270
-            CharacterSkin.RYDER -> 271
-            CharacterSkin.BIG_SMOKE -> 269
-            CharacterSkin.CESAR -> 292
-            CharacterSkin.KENDL -> 193
-            CharacterSkin.THE_TRUTH -> 1
-            CharacterSkin.WU_ZI_MU -> 294
-            CharacterSkin.MIKE_TORENO -> 295
-            CharacterSkin.CATALINA -> 298
-        }
+    fun getSkinModelId(skin: CharacterSkin): Int {
+        return skin.modelId
     }
 
     fun getDeviceIpAddress(): String {

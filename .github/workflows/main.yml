@@ -226,7 +226,7 @@ jobs:
               }
           """))
 
-          subprocess.run(["gradle", "assembleDebug", "--stacktrace"], check=True)
+          subprocess.run(["gradle", "testDebugUnitTest", "assembleDebug", "--stacktrace"], check=True)
 
           out_dir = Path(os.environ["GITHUB_WORKSPACE"]) / "apk_out"
           out_dir.mkdir(parents=True, exist_ok=True)

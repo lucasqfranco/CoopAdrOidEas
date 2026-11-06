@@ -49,6 +49,7 @@ import androidx.compose.ui.unit.sp
 import com.example.model.CharacterSkin
 import com.example.model.NetworkConnectionMode
 import com.example.model.PlayerMarkerColor
+import com.example.model.SkinCategory
 import com.example.ui.theme.ArmorBlue
 import com.example.ui.theme.BebasNeueFontFamily
 import com.example.ui.theme.DarkSurfaceElevated
@@ -336,21 +337,52 @@ fun LobbyScreen(
             shape = RoundedCornerShape(16.dp),
             border = BorderStroke(1.dp, Color(0xFF28382C))
         ) {
+            var selectedCategory by remember { mutableStateOf(modStatus.mySelectedSkin.category) }
+            var customSkinInput by remember(modStatus.customSkinId, modStatus.mySelectedSkin) {
+                mutableStateOf((modStatus.customSkinId ?: modStatus.mySelectedSkin.modelId).toString())
+            }
+            val activeSkinId = modStatus.customSkinId ?: modStatus.mySelectedSkin.modelId
+
             Column(modifier = Modifier.padding(14.dp)) {
                 Text(
-                    text = "3. ELEGÍ TU PERSONAJE: ${modStatus.mySelectedSkin.displayName.uppercase()}",
+                    text = "3. ELEGÍ TU PERSONAJE: ${modStatus.mySelectedSkin.displayName.uppercase()} (ID $activeSkinId)",
                     fontFamily = BebasNeueFontFamily,
                     fontSize = 15.sp,
                     color = Color.LightGray
                 )
+                Spacer(modifier = Modifier.height(6.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    SkinCategory.entries.forEach { cat ->
+                        val catSelected = selectedCategory == cat
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(if (catSelected) SanAndreasGold else Color(0xFF141E17))
+                                .clickable { selectedCategory = cat }
+                                .padding(vertical = 6.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = cat.title,
+                                fontFamily = BebasNeueFontFamily,
+                                fontSize = 11.sp,
+                                color = if (catSelected) Color.Black else Color.LightGray
+                            )
+                        }
+                    }
+                }
                 Spacer(modifier = Modifier.height(8.dp))
                 FlowRow(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                     verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    CharacterSkin.entries.take(6).forEach { skin ->
-                        val selected = modStatus.mySelectedSkin == skin
+                    CharacterSkin.entries.filter { it.category == selectedCategory }.forEach { skin ->
+                        val selected = modStatus.customSkinId == null && modStatus.mySelectedSkin == skin
                         Box(
                             modifier = Modifier
                                 .clip(RoundedCornerShape(8.dp))
@@ -359,14 +391,38 @@ fun LobbyScreen(
                                 .padding(horizontal = 10.dp, vertical = 6.dp)
                         ) {
                             Text(
-                                text = skin.displayName,
+                                text = "${skin.displayName} (${skin.modelId})",
                                 fontFamily = BebasNeueFontFamily,
-                                fontSize = 13.sp,
+                                fontSize = 12.sp,
                                 color = if (selected) Color.Black else Color.LightGray
                             )
                         }
                     }
                 }
+                Spacer(modifier = Modifier.height(10.dp))
+                OutlinedTextField(
+                    value = customSkinInput,
+                    onValueChange = { raw ->
+                        val digits = raw.filter { it.isDigit() }.take(3)
+                        customSkinInput = digits
+                        digits.toIntOrNull()?.let { id ->
+                            viewModel.changeCustomSkinId(id.coerceIn(0, 299))
+                        }
+                    },
+                    label = { Text("ID de Skin (0-299) • Cualquiera de las 300 skins de GTA SA") },
+                    singleLine = true,
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = GroveGreen,
+                        unfocusedBorderColor = Color(0xFF28382C),
+                        focusedLabelColor = GroveGreen,
+                        unfocusedLabelColor = Color.Gray,
+                        focusedTextColor = Color.White,
+                        unfocusedTextColor = Color.White
+                    ),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("custom_skin_id_input")
+                )
                 Spacer(modifier = Modifier.height(12.dp))
                 Text(
                     text = "COLOR DE TU FLECHA / MARCADOR: ${modStatus.myMarkerColor.displayName.uppercase()}",
