@@ -338,10 +338,60 @@ class ModFileManager(private val context: Context) {
             it.name.equals("libCoopAndreasBridge.so", ignoreCase = true)
         } == true || File(appModDir, "mods/libCoopAndreasBridge.so").exists()
 
+        var parsedIsHost = _status.value.isHostDevice
+        var parsedHostIp = _status.value.targetHostIp
+        var parsedRoomCode = _status.value.roomCode
+        var parsedCustomSkinId = _status.value.customSkinId
+        var parsedSelectedSkin = _status.value.mySelectedSkin
+        var parsedPartnerSkin = _status.value.partnerSkin
+
+        try {
+            val sampIniFile = detectedUnprotectedBase?.let { File(it, "files/SAMP/settings.ini") }
+                ?.takeIf { it.exists() }
+                ?: File(appModDir, "SAMP/settings.ini").takeIf { it.exists() }
+            if (sampIniFile != null) {
+                sampIniFile.readLines().forEach { rawLine ->
+                    val line = rawLine.trim()
+                    if (line.contains("=") && !line.startsWith(";") && !line.startsWith("#")) {
+                        val k = line.substringBefore("=").trim().lowercase()
+                        val v = line.substringAfter("=").substringBefore(";").trim()
+                        when (k) {
+                            "is_host" -> parsedIsHost = (v == "1" || v.equals("true", ignoreCase = true))
+                            "host" -> if (v.isNotBlank() && v != "127.0.0.1" && v != "0.0.0.0") parsedHostIp = v
+                            "room_code" -> if (v.isNotBlank()) parsedRoomCode = v
+                            "skin_id" -> {
+                                val sid = v.toIntOrNull()
+                                if (sid != null && sid >= 0) {
+                                    parsedCustomSkinId = if (sid > 0) sid else null
+                                    CharacterSkin.entries.firstOrNull { it.modelId == sid }?.let {
+                                        parsedSelectedSkin = it
+                                    }
+                                }
+                            }
+                            "partner_skin_id" -> {
+                                val psid = v.toIntOrNull()
+                                if (psid != null) {
+                                    CharacterSkin.entries.firstOrNull { it.modelId == psid }?.let {
+                                        parsedPartnerSkin = it
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (_: Exception) {}
+
         _status.value = _status.value.copy(
             isModInstalled = hasGeneratedAll,
             isVerifiedInGta = isVerifiedInGta,
             localIpAddress = localIp,
+            isHostDevice = parsedIsHost,
+            targetHostIp = parsedHostIp,
+            roomCode = parsedRoomCode,
+            customSkinId = parsedCustomSkinId,
+            mySelectedSkin = parsedSelectedSkin,
+            partnerSkin = parsedPartnerSkin,
             installedFiles = if (hasGeneratedAll) generatedFiles else emptyList(),
             isAndroidUnprotectedEdition = isUnprotectedEdition,
             androidUnprotectedPath = detectedUnprotectedBase?.absolutePath,

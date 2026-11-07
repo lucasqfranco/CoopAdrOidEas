@@ -95,6 +95,8 @@ class CoopMainViewModel(application: Application) : AndroidViewModel(application
     init {
         val detectedIp = modFileManager.getDeviceIpAddress()
         coopNetworkManager.updateLocalIp(detectedIp)
+        coopNetworkManager.setHostMode(modStatus.value.isHostDevice)
+        coopNetworkManager.updateMySkin(modStatus.value.mySelectedSkin)
 
         // Conectar motor de voz (UDP 8990 + Relay Online) con el gestor de red P2P
         coopNetworkManager.onVoiceFrameReceived = { frame ->

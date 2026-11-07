@@ -109,7 +109,7 @@ object CoopNativeBridge {
 
     private external fun nativeWriteTelemetryBin(binFilePath: String): Boolean
     private external fun nativeBuildTelemetryPacket(slot: Int): String
-    private external fun nativeReceiveRemotePacket(packetStr: String): String
+    private external fun nativeReceiveRemotePacket(packetStr: String): Boolean
     private external fun nativeSyncMissionState(
         onMissionFlag: Int,
         missionId: String,
