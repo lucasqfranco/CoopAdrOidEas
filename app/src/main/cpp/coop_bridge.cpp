@@ -1432,23 +1432,11 @@ public:
             *reinterpret_cast<float*>(localPedAddr + 0x6b4) = 100.0f;
         }
 
-        // Aplicar Skin elegida al jugador local ($PLAYER_CHAR / FindPlayerPed(0)) si difiere del modelo actual
+        // Publicar la Skin elegida del jugador local hacia los compañeros remotos.
+        // REGLA ANTI-CRASH: NUNCA llamar a cpedSetModelIndexFn sobre localPed (FindPlayerPed(-1) / CPlayerPed)
+        // porque cambiar el modelo del jugador local corrompe CClothes y crashea GTA SA.
         if (config_.localSkinModelId > 0) {
             me.skinModelId = config_.localSkinModelId;
-        }
-        if (me.skinModelId > 0 && tickCount > 120 && myVeh == nullptr && !localTryingToEnterCar) {
-            int32_t targetLocalModel = resolveSafePedModelId(me.skinModelId);
-            int16_t curLocalModel = *reinterpret_cast<int16_t*>(localPedAddr + 0x32);
-            if (targetLocalModel > 0 && curLocalModel != targetLocalModel) {
-                if (!gtaSymbols_.isModelLoaded(targetLocalModel)) {
-                    if ((tickCount % 5 == 0) && gtaSymbols_.cstreamingRequestModelFn) {
-                        gtaSymbols_.cstreamingRequestModelFn(targetLocalModel, 2);
-                    }
-                } else if (gtaSymbols_.cpedSetModelIndexFn && localAppliedSkinModel_ != targetLocalModel) {
-                    gtaSymbols_.cpedSetModelIndexFn(localPed, static_cast<uint32_t>(targetLocalModel));
-                    localAppliedSkinModel_ = targetLocalModel;
-                }
-            }
         }
 
         // ====================================================================
@@ -2301,9 +2289,18 @@ public:
             // Si el CPed remoto aún no fue creado en el mundo 3D, instanciarlo siguiendo la secuencia exacta de CREATE_CHAR (009A)
             if (!ped && gtaSymbols_.cpedOperatorNewFn && gtaSymbols_.ccivilianPedCtorFn && gtaSymbols_.cworldAddFn) {
                 uint32_t spawnModel = 0;
+                int32_t desiredRemModel = resolveSafePedModelId(rem.skinModelId);
+                if (desiredRemModel > 0) {
+                    if (gtaSymbols_.isModelLoaded(desiredRemModel)) {
+                        spawnModel = static_cast<uint32_t>(desiredRemModel);
+                    } else if (gtaSymbols_.cstreamingRequestModelFn) {
+                        gtaSymbols_.cstreamingRequestModelFn(desiredRemModel, 2);
+                    }
+                }
                 void* newPed = gtaSymbols_.cpedOperatorNewFn(0x9c8);
                 if (newPed) {
                     gtaSymbols_.ccivilianPedCtorFn(newPed, 4 /*PED_TYPE_CIVMALE*/, spawnModel);
+                    remotePedSpawnedModel_[i] = static_cast<int32_t>(spawnModel);
                     uintptr_t newPedAddr = reinterpret_cast<uintptr_t>(newPed);
 
                     uintptr_t pedIntel = *reinterpret_cast<uintptr_t*>(newPedAddr + 0x538);
@@ -2362,8 +2359,9 @@ public:
                     }
 
                     ped = newPed;
-                    LOGI("Spawned 3D Remote Player P%d (ped=%p, handle=%d, blip=%d, model=%u) at (%.2f, %.2f, %.2f)",
-                         i + 1, newPed, handle, remoteBlipHandle_[i], spawnModel, targetRemX, targetRemY, targetRemZ);
+                    LOGI("Spawned 3D Remote Player P%d (ped=%p, handle=%d, blip=%d, reqSkin=%d, safeModel=%d, spawnedModel=%d, modelLoaded=%d) at (%.2f, %.2f, %.2f)",
+                         i + 1, newPed, handle, remoteBlipHandle_[i], rem.skinModelId, desiredRemModel, remotePedSpawnedModel_[i],
+                         (desiredRemModel > 0 && gtaSymbols_.isModelLoaded(desiredRemModel)) ? 1 : 0, targetRemX, targetRemY, targetRemZ);
                 }
             }
 
@@ -2395,6 +2393,8 @@ public:
                         } else if (gtaSymbols_.cpedSetModelIndexFn) {
                             gtaSymbols_.cpedSetModelIndexFn(ped, static_cast<uint32_t>(targetRemModel));
                             remotePedSpawnedModel_[i] = targetRemModel;
+                            LOGI("Updated 3D Remote Player P%d Skin (ped=%p, reqSkin=%d -> safeModel=%d, isModelLoaded=1)",
+                                 i + 1, ped, rem.skinModelId, targetRemModel);
                         }
                     }
                 }
@@ -3556,6 +3556,17 @@ private:
         if (!logf) return;
         std::string summary = getBridgeSummary();
         fprintf(logf, "=== COOPANDREAS NATIVE BRIDGE ACTIVE IN GTA SA ===\nLocalIP: %s\n%s\n", myIp.c_str(), summary.c_str());
+        fprintf(logf, "Session: Role=%s | Slot=%d | Room=%s | HostIP=%s | ActivePeers=%zu | JoinInProgress=READY | OnMission=%d | Mission=%s\n",
+                config_.isHost ? "HOST" : "GUEST", config_.localPlayerSlot, config_.roomCode.c_str(),
+                config_.hostIp.c_str(), activePeers_.size(), mission_.onMissionFlag, mission_.missionId.c_str());
+        for (int i = 0; i < kMaxCoopPlayers; ++i) {
+            int32_t reqSkin = players_[i].skinModelId;
+            int32_t safeSkin = resolveSafePedModelId(reqSkin);
+            int loaded = (safeSkin > 0 && gtaSymbols_.isModelLoaded(safeSkin)) ? 1 : (safeSkin == 0 ? 1 : 0);
+            fprintf(logf, "Slot P%d: active=%d | reqSkinModelId=%d | safePedModelId=%d | isModelLoaded=%d | remotePedSpawnedModel=%d | pedPtr=%p | pos=(%.1f, %.1f, %.1f)\n",
+                    i + 1, players_[i].isActive ? 1 : 0, reqSkin, safeSkin, loaded,
+                    remotePedSpawnedModel_[i], remotePedPtr_[i], players_[i].x, players_[i].y, players_[i].z);
+        }
         fclose(logf);
     }
 
@@ -3626,7 +3637,7 @@ private:
             case 294: return 118; // Woozie -> Triad TRIADB
             case 295: return 165; // Mike Toreno -> WMOMIB
             case 297: return 22;  // Madd Dogg -> BMYST
-            case 298: return 193; // Catalina -> BFYPRO
+            case 298: return 192; // Catalina -> WFYPRO (peds.ide 192)
             case 299: return 100; // Claude Speed -> BIKERA
             default:
                 return std::clamp(modelId, 0, 288);

@@ -87,7 +87,7 @@ enum class CharacterSkin(
     WU_ZI_MU("Wu Zi Mu 'Woozie'", "Mountain Cloud Boys", 0xFF6366F1, 294, 118, SkinCategory.PROTAGONISTS),
     THE_TRUTH("The Truth", "Badlands Mystic", 0xFF84CC16, 1, 1, SkinCategory.PROTAGONISTS),
     MIKE_TORENO("Mike Toreno", "Undercover Agent", 0xFF64748B, 295, 165, SkinCategory.PROTAGONISTS),
-    CATALINA("Catalina", "Fern Ridge Outlaw", 0xFFDC2626, 298, 193, SkinCategory.PROTAGONISTS),
+    CATALINA("Catalina", "Fern Ridge Outlaw", 0xFFDC2626, 298, 192, SkinCategory.PROTAGONISTS),
     KENDL("Kendl Johnson", "Families Diplomat", 0xFFEC4899, 193, 193, SkinCategory.PROTAGONISTS),
     CLAUDE_SPEED("Claude Speed", "GTA III Legend", 0xFF334155, 299, 100, SkinCategory.PROTAGONISTS),
     ZERO("Zero", "RC Shop Nerd", 0xFF0EA5E9, 289, 170, SkinCategory.PROTAGONISTS),
@@ -97,15 +97,20 @@ enum class CharacterSkin(
     KENT_PAUL("Kent Paul", "Music Manager", 0xFF38BDF8, 291, 29, SkinCategory.PROTAGONISTS),
     KEN_ROSENBERG("Ken Rosenberg", "Caligula's Lawyer", 0xFFF43F5E, 290, 187, SkinCategory.PROTAGONISTS),
 
-    // Pandillas
+    // Pandillas (peds.ide seguras)
     HOMIE_GROVE_1("Homie Grove 1", "Grove Street", 0xFF22C55E, 105, 105, SkinCategory.GANGS),
     HOMIE_GROVE_2("Homie Grove 2", "Grove Street", 0xFF16A34A, 106, 106, SkinCategory.GANGS),
     HOMIE_GROVE_3("Homie Grove 3", "Grove Street", 0xFF15803D, 107, 107, SkinCategory.GANGS),
     BALLAS_1("Ballas 1", "Rollin Heights", 0xFF9333EA, 102, 102, SkinCategory.GANGS),
     BALLAS_2("Ballas 2", "Front Yard Ballas", 0xFF7E22CE, 103, 103, SkinCategory.GANGS),
+    BALLAS_3("Ballas 3", "Kilo Tray Ballas", 0xFF6B21A8, 104, 104, SkinCategory.GANGS),
     VAGOS_1("Vagos 1", "Los Santos Vagos", 0xFFFACC15, 108, 108, SkinCategory.GANGS),
+    VAGOS_2("Vagos 2", "East Beach Vagos", 0xFFEAB308, 109, 109, SkinCategory.GANGS),
     AZTECA_1("Azteca 1", "Varrios Los Aztecas", 0xFF06B6D4, 114, 114, SkinCategory.GANGS),
+    AZTECA_2("Azteca 2", "El Corona Aztecas", 0xFF0891B2, 115, 115, SkinCategory.GANGS),
+    AZTECA_3("Azteca 3", "Little Mexico Aztecas", 0xFF0E7490, 116, 116, SkinCategory.GANGS),
     TRIAD("Triad", "San Fierro Triads", 0xFFEF4444, 117, 117, SkinCategory.GANGS),
+    TRIAD_2("Triad 2", "Mountain Cloud Triads", 0xFFDC2626, 118, 118, SkinCategory.GANGS),
     DA_NANG_BOY("Da Nang Boy", "Da Nang Boys", 0xFF84CC16, 121, 121, SkinCategory.GANGS),
     MAFIA_RUSA("Mafia Rusa", "Russian Mafia", 0xFF94A3B8, 111, 111, SkinCategory.GANGS),
     BIKER("Biker", "San Andreas Bikers", 0xFF78350F, 100, 100, SkinCategory.GANGS),
@@ -115,11 +120,19 @@ enum class CharacterSkin(
     PULASKI("Pulaski", "C.R.A.S.H.", 0xFF1D4ED8, 266, 280, SkinCategory.FORCES_VILLAINS),
     HERNANDEZ("Hernandez", "C.R.A.S.H.", 0xFF2563EB, 267, 280, SkinCategory.FORCES_VILLAINS),
     LSPD_COP("Policía LSPD", "Los Santos PD", 0xFF3B82F6, 280, 280, SkinCategory.FORCES_VILLAINS),
+    SFPD_COP("Policía SFPD", "San Fierro PD", 0xFF2563EB, 281, 281, SkinCategory.FORCES_VILLAINS),
+    LVPD_COP("Policía LVPD", "Las Venturas PD", 0xFF1D4ED8, 282, 282, SkinCategory.FORCES_VILLAINS),
+    COUNTRY_SHERIFF("Sheriff Rural", "County Sheriff", 0xFF854D0E, 283, 283, SkinCategory.FORCES_VILLAINS),
+    MOTO_COP("Policía Motorizado", "Highway Patrol", 0xFF1E40AF, 284, 284, SkinCategory.FORCES_VILLAINS),
     SWAT_TACTICAL("SWAT Táctico", "Fuerzas Especiales", 0xFF0F172A, 285, 285, SkinCategory.FORCES_VILLAINS),
     FBI_AGENT("Agente FBI", "Federal Agent", 0xFF1E293B, 286, 286, SkinCategory.FORCES_VILLAINS),
     ARMY_SOLDIER("Soldado Ejército", "Area 69 Military", 0xFF3F6212, 287, 287, SkinCategory.FORCES_VILLAINS),
-    PARAMEDIC("Médico", "Los Santos EMS", 0xFFEF4444, 274, 274, SkinCategory.FORCES_VILLAINS),
-    FIREFIGHTER("Bombero", "LSFD Rescue", 0xFFF97316, 277, 277, SkinCategory.FORCES_VILLAINS)
+    PARAMEDIC("Médico LS", "Los Santos EMS", 0xFFEF4444, 274, 274, SkinCategory.FORCES_VILLAINS),
+    PARAMEDIC_LV("Médico LV", "Las Venturas EMS", 0xFFDC2626, 275, 275, SkinCategory.FORCES_VILLAINS),
+    PARAMEDIC_SF("Médico SF", "San Fierro EMS", 0xFFB91C1C, 276, 276, SkinCategory.FORCES_VILLAINS),
+    FIREFIGHTER("Bombero LS", "LSFD Rescue", 0xFFF97316, 277, 277, SkinCategory.FORCES_VILLAINS),
+    FIREFIGHTER_LV("Bombero LV", "LVFD Rescue", 0xFFEA580C, 278, 278, SkinCategory.FORCES_VILLAINS),
+    FIREFIGHTER_SF("Bombero SF", "SFFD Rescue", 0xFFC2410C, 279, 279, SkinCategory.FORCES_VILLAINS)
 }
 
 enum class PlayerMarkerColor(val radarColorId: Int, val displayName: String, val colorHex: Long) {

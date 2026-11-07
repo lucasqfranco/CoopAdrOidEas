@@ -727,6 +727,7 @@ class CoopNetworkManager(private val scope: CoroutineScope) {
 
                 writer.println("WELCOME|${_session.value.roomCode}|Carl 'CJ'|FREEROAM:1|UDP:$UDP_COOP_TORNAMIC_PORT,$UDP_TELEMETRY_VOICE_PORT")
                 if (_session.value.status == SessionStatus.IN_PROGRESS) {
+                    writer.println("START_GAME|FREEROAM:1|${_session.value.currentMission.id}|${_session.value.onMissionFlag}")
                     writer.println(
                         "JOIN_IN_PROGRESS_SYNC|${_session.value.currentMission.id}|${_session.value.currentCheckpointIndex}|${_session.value.onMissionFlag}|$hostX|$hostY|$hostZ|$slotNum"
                     )
@@ -902,6 +903,28 @@ class CoopNetworkManager(private val scope: CoroutineScope) {
                         }
 
                         when {
+                            payload.startsWith("HELLO") || payload.startsWith("JOIN") -> {
+                                if (_session.value.isHost && _session.value.status == SessionStatus.IN_PROGRESS && pkt.address != null) {
+                                    val hostRef = _session.value.players.firstOrNull { it.isHost }
+                                    val hostTelem = CoopNativeBridge.getSlotTelemetry(1)
+                                    val hostX = hostTelem?.x ?: hostRef?.posX ?: 2495.0f
+                                    val hostY = hostTelem?.y ?: hostRef?.posY ?: -1687.0f
+                                    val hostZ = hostTelem?.z ?: hostRef?.posZ ?: 13.5f
+                                    val slotNum = (_session.value.players.size + 1).coerceIn(2, 4)
+                                    val startMsg = "START_GAME|FREEROAM:1|${_session.value.currentMission.id}|${_session.value.onMissionFlag}"
+                                    val startBytes = startMsg.toByteArray(Charsets.UTF_8)
+                                    val syncMsg = "JOIN_IN_PROGRESS_SYNC|${_session.value.currentMission.id}|${_session.value.currentCheckpointIndex}|${_session.value.onMissionFlag}|$hostX|$hostY|$hostZ|$slotNum"
+                                    val syncBytes = syncMsg.toByteArray(Charsets.UTF_8)
+                                    try {
+                                        socket.send(DatagramPacket(startBytes, startBytes.size, pkt.address, pkt.port))
+                                        socket.send(DatagramPacket(syncBytes, syncBytes.size, pkt.address, pkt.port))
+                                    } catch (_: Exception) {}
+                                    sendTelemetryPacket(CoopNativeBridge.buildTelemetryPacket(1))
+                                }
+                            }
+                            payload.startsWith("START_GAME") || payload.startsWith("JOIN_IN_PROGRESS_SYNC|") -> {
+                                handleIncomingControlLine(payload)
+                            }
                             payload.startsWith("COOP_TELEM_V2|") || payload.startsWith("TELEM|") -> {
                                 handleIncomingTelemetryPacket(payload)
                                 if (_session.value.isHost) {
@@ -1133,23 +1156,34 @@ class CoopNetworkManager(private val scope: CoroutineScope) {
 
             val roomPayload = hashMapOf<String, Any>(
                 "roomCode" to roomCode,
-                "updatedAt" to System.currentTimeMillis(),
-                "missionId" to _session.value.currentMission.id,
-                "checkpointIndex" to _session.value.currentCheckpointIndex,
-                "onMissionFlag" to _session.value.onMissionFlag,
-                "status" to _session.value.status.name
+                "updatedAt" to System.currentTimeMillis()
             )
             if (asHost) {
+                roomPayload["missionId"] = _session.value.currentMission.id
+                roomPayload["checkpointIndex"] = _session.value.currentCheckpointIndex
+                roomPayload["onMissionFlag"] = _session.value.onMissionFlag
+                roomPayload["status"] = _session.value.status.name
                 roomPayload["hostEndpoint"] = stunEndpoint ?: _session.value.localIp
                 roomPayload["hostName"] = _session.value.hostName
             } else {
                 roomPayload["guestEndpoint"] = stunEndpoint ?: _session.value.localIp
             }
-            roomRef.set(roomPayload)
+            roomRef.set(roomPayload, com.google.firebase.firestore.SetOptions.merge())
 
             firestoreRoomListener?.remove()
             firestoreRoomListener = roomRef.addSnapshotListener { snapshot, error ->
                 if (error != null || snapshot == null || !snapshot.exists()) return@addSnapshotListener
+                if (asHost && _session.value.status == SessionStatus.IN_PROGRESS && !snapshot.getString("guestEndpoint").isNullOrBlank()) {
+                    val lastPkt = snapshot.getString("lastRelayPacket") ?: ""
+                    if (!lastPkt.startsWith("JOIN_IN_PROGRESS_SYNC|")) {
+                        val hostRef = _session.value.players.firstOrNull { it.isHost }
+                        val hostTelem = CoopNativeBridge.getSlotTelemetry(1)
+                        val hostX = hostTelem?.x ?: hostRef?.posX ?: 2495.0f
+                        val hostY = hostTelem?.y ?: hostRef?.posY ?: -1687.0f
+                        val hostZ = hostTelem?.z ?: hostRef?.posZ ?: 13.5f
+                        sendOnlineRelayFrame("JOIN_IN_PROGRESS_SYNC|${_session.value.currentMission.id}|${_session.value.currentCheckpointIndex}|${_session.value.onMissionFlag}|$hostX|$hostY|$hostZ|2")
+                    }
+                }
                 val lastPacket = snapshot.getString("lastRelayPacket")
                 if (!lastPacket.isNullOrBlank()) {
                     when {
