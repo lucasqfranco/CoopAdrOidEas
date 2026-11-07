@@ -317,9 +317,6 @@ class CoopMainViewModel(application: Application) : AndroidViewModel(application
             try {
                 CoopNativeBridge.classifyAndSyncCheat(code, if (sessionState.value.isHost) 1 else 2)
             } catch (_: Throwable) {}
-            if (code in setOf("AFZLLQLL", "AUIFRVQS", "IOJUFZN")) {
-                coopNetworkManager.sendTacticalPing(TacticalPingType.OBJECTIVE)
-            }
         }
         showNotification("⚡ Truco enviado a GTA SA: $code")
     }

@@ -1521,10 +1521,8 @@ public:
                     if (gtaSymbols_.ccheatJetpackCheatFn) gtaSymbols_.ccheatJetpackCheatFn();
                 } else if (cheatCmd == "AEZAKMI") {
                     if (gtaSymbols_.ccheatNotWantedCheatFn) gtaSymbols_.ccheatNotWantedCheatFn();
-                    me.wantedStars = 0;
                 } else if (cheatCmd == "OSRBLHH") {
                     if (gtaSymbols_.ccheatWantedCheatFn) gtaSymbols_.ccheatWantedCheatFn();
-                    me.wantedStars = static_cast<uint8_t>(std::min<int>(6, me.wantedStars + 2));
                 } else if (cheatCmd == "AIWPRTON" || cheatCmd == "JUMPJET" || cheatCmd == "OHDUDE" ||
                            cheatCmd == "PDNEJOH" || cheatCmd == "FOURWHEELFUN") {
                     int vehModel = (cheatCmd == "AIWPRTON") ? 432 :

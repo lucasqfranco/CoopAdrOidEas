@@ -506,7 +506,7 @@ fun ActiveMissionOverlay(
                 Spacer(modifier = Modifier.height(8.dp))
                 Card(
                     modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(containerColor = DarkSurfaceElevated),
+                    colors = CardDefaults.cardColors(containerColor = Color(0xFF151C17)),
                     shape = RoundedCornerShape(12.dp)
                 ) {
                     Column(
