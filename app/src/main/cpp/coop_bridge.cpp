@@ -792,7 +792,8 @@ public:
     // ========================================================================
     void applySmoothPedTransformAndAnim(
         void* ped, float targetX, float targetY, float targetZ,
-        float vx, float vy, float vz, float heading, int moveState, float health
+        float vx, float vy, float vz, float heading, int moveState, float health,
+        uint64_t lastNetworkUpdateMs = 0
     ) {
 #if defined(__unix__) || defined(__ANDROID__) || defined(__linux__)
         if (!ped) return;
@@ -825,36 +826,50 @@ public:
             }
         }
 
+        // a) Predicción dead-reckoning suave entre paquetes de 60 Hz
+        uint64_t nowMs = currentTimeMillis();
+        float dtSec = (lastNetworkUpdateMs > 0 && nowMs > lastNetworkUpdateMs)
+            ? std::clamp(static_cast<float>(nowMs - lastNetworkUpdateMs) * 0.001f, 0.0f, 0.05f)
+            : 0.0f;
+        float predX = targetX + vx * dtSec * 50.0f;
+        float predY = targetY + vy * dtSec * 50.0f;
+        float predZ = targetZ;
+
         uintptr_t mat = *reinterpret_cast<uintptr_t*>(pedAddr + 0x18);
-        float curX = targetX, curY = targetY, curZ = targetZ;
+        float curX = predX, curY = predY, curZ = predZ;
         if (mat != 0) {
             curX = *reinterpret_cast<float*>(mat + 0x30);
             curY = *reinterpret_cast<float*>(mat + 0x34);
             curZ = *reinterpret_cast<float*>(mat + 0x38);
         }
 
-        float dx = targetX - curX;
-        float dy = targetY - curY;
-        float dz = targetZ - curZ;
+        float dx = predX - curX;
+        float dy = predY - curY;
+        float dz = predZ - curZ;
         float distSq = dx * dx + dy * dy + dz * dz;
 
         float speed2d = std::sqrt(vx * vx + vy * vy);
         int effectiveMoveState = moveState;
         if (effectiveMoveState != 4 && effectiveMoveState != 6 && effectiveMoveState != 7) {
-            if (speed2d > 0.14f) effectiveMoveState = 7;      // PEDMOVE_SPRINT
-            else if (speed2d > 0.05f) effectiveMoveState = 6; // PEDMOVE_RUN
+            if (speed2d > 0.14f) effectiveMoveState = 7;       // PEDMOVE_SPRINT
+            else if (speed2d > 0.05f) effectiveMoveState = 6;  // PEDMOVE_RUN
             else if (speed2d > 0.015f) effectiveMoveState = 4; // PEDMOVE_WALK
-            else effectiveMoveState = 1;                      // PEDMOVE_STILL
+            else effectiveMoveState = 1;                       // PEDMOVE_STILL
         }
 
-        if (mat != 0 && gtaSymbols_.cworldRemoveFn && gtaSymbols_.cworldAddFn) {
-            // Interpolación suave continua (0.28f al caminar/correr cerca, evitando tirones hacia atrás entre paquetes de 30Hz)
-            float alpha = (distSq > 25.0f) ? 1.0f : ((effectiveMoveState >= 4 && distSq < 6.0f) ? 0.28f : 0.48f);
-            float nextX = curX + dx * alpha;
-            float nextY = curY + dy * alpha;
-            float nextZ = curZ + dz * ((distSq > 25.0f) ? 1.0f : 0.50f);
+        if (mat != 0) {
+            float alphaXY = (distSq > 25.0f) ? 1.0f : ((effectiveMoveState >= 4 && distSq < 6.0f) ? 0.38f : 0.50f);
+            float alphaZ = (distSq > 25.0f) ? 1.0f : ((std::fabs(dz) < 0.45f && std::fabs(vz) < 0.05f) ? 0.15f : 0.45f);
+            float nextX = curX + dx * alphaXY;
+            float nextY = curY + dy * alphaXY;
+            float nextZ = curZ + dz * alphaZ;
 
-            gtaSymbols_.cworldRemoveFn(ped);
+            // b) ANTI-SALTO EN Z: solo reinsertar en sectores de CWorld si distSq >= 4.0f o cada 15 ticks
+            // para evitar que CWorld::Add dispare impulsos verticales de colisión en cada frame
+            bool needWorldSectorRelink = (distSq >= 4.0f) || ((mainThreadTicks_.load() % 15) == 0);
+            if (needWorldSectorRelink && gtaSymbols_.cworldRemoveFn) {
+                gtaSymbols_.cworldRemoveFn(ped);
+            }
 
             *reinterpret_cast<float*>(mat + 0x30) = nextX;
             *reinterpret_cast<float*>(mat + 0x34) = nextY;
@@ -863,33 +878,45 @@ public:
             *reinterpret_cast<float*>(pedAddr + 0x0c) = nextY;
             *reinterpret_cast<float*>(pedAddr + 0x10) = nextZ;
 
+            // c) Interpolación de heading por el camino angular más corto
             if (std::isfinite(heading)) {
-                float c = std::cos(heading);
-                float s = std::sin(heading);
+                float curH = *reinterpret_cast<float*>(pedAddr + 0x6c4);
+                float diffH = std::isfinite(curH) ? std::atan2(std::sin(heading - curH), std::cos(heading - curH)) : 0.0f;
+                float smoothH = (distSq > 25.0f || !std::isfinite(curH)) ? heading : (curH + diffH * 0.40f);
+                float c = std::cos(smoothH);
+                float s = std::sin(smoothH);
                 *reinterpret_cast<float*>(mat + 0x00) = c;
                 *reinterpret_cast<float*>(mat + 0x04) = s;
                 *reinterpret_cast<float*>(mat + 0x08) = 0.0f;
                 *reinterpret_cast<float*>(mat + 0x10) = -s;
                 *reinterpret_cast<float*>(mat + 0x14) = c;
                 *reinterpret_cast<float*>(mat + 0x18) = 0.0f;
-                *reinterpret_cast<float*>(pedAddr + 0x6c4) = heading;
-                *reinterpret_cast<float*>(pedAddr + 0x6c8) = heading;
+                *reinterpret_cast<float*>(pedAddr + 0x6c4) = smoothH;
+                *reinterpret_cast<float*>(pedAddr + 0x6c8) = smoothH;
             }
 
-            // Poner m_vecMoveSpeed (+0x68..+0x70) en 0 para evitar doble desplazamiento con CWorld::Process
+            // Desactivar rebote vertical y velocidad residual física (m_vecMoveSpeed +0x68..+0x70 y m_vecTurnSpeed +0x74..+0x7c)
             *reinterpret_cast<float*>(pedAddr + 0x68) = 0.0f;
             *reinterpret_cast<float*>(pedAddr + 0x6c) = 0.0f;
             *reinterpret_cast<float*>(pedAddr + 0x70) = 0.0f;
+            *reinterpret_cast<float*>(pedAddr + 0x74) = 0.0f;
+            *reinterpret_cast<float*>(pedAddr + 0x78) = 0.0f;
+            *reinterpret_cast<float*>(pedAddr + 0x7c) = 0.0f;
             *reinterpret_cast<uint8_t*>(pedAddr + 0x584) |= 0x01; // bIsStanding = true
 
             if (gtaSymbols_.centityUpdateRwFrameFn) {
                 gtaSymbols_.centityUpdateRwFrameFn(ped);
             }
-            gtaSymbols_.cworldAddFn(ped);
+            if (needWorldSectorRelink && gtaSymbols_.cworldAddFn) {
+                gtaSymbols_.cworldAddFn(ped);
+            }
         }
 
-        // CRÍTICO: m_fMoveAnimRate (+0x688) debe ser siempre 1.0f
-        *reinterpret_cast<float*>(pedAddr + 0x688) = 1.0f;
+        // Sincronizar m_fMoveAnimRate (+0x688) proporcional a speed2d para que los pasos coincidan 1:1 con el desplazamiento
+        float animRate = (effectiveMoveState >= 4 && speed2d > 0.005f)
+            ? std::clamp(speed2d * 12.0f, 0.85f, 1.35f)
+            : 1.0f;
+        *reinterpret_cast<float*>(pedAddr + 0x688) = animRate;
 
         if (effectiveMoveState == 1 && pedIntel != 0) {
             uintptr_t defaultTaskAddr = *reinterpret_cast<uintptr_t*>(pedIntel + 0x28);
@@ -2627,7 +2654,7 @@ public:
                         applySmoothPedTransformAndAnim(
                             ped, targetRemX, targetRemY, targetRemZ,
                             rem.vx, rem.vy, rem.vz, rem.heading,
-                            static_cast<int>(rem.animId), 200.0f
+                            static_cast<int>(rem.animId), 200.0f, rem.lastNetworkUpdateMs
                         );
                     }
                 } else {
@@ -2637,7 +2664,7 @@ public:
                     applySmoothPedTransformAndAnim(
                         ped, targetRemX, targetRemY, targetRemZ,
                         rem.vx, rem.vy, rem.vz, rem.heading,
-                        static_cast<int>(rem.animId), 200.0f
+                        static_cast<int>(rem.animId), 200.0f, rem.lastNetworkUpdateMs
                     );
                 }
             }
@@ -2662,7 +2689,7 @@ public:
 
             struct timeval tv;
             tv.tv_sec = 0;
-            tv.tv_usec = 12000; // 12ms poll interval
+            tv.tv_usec = 4000; // 4ms poll interval for 60 Hz low-latency sync
             setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 
             sockaddr_in bindAddr{};
@@ -2737,10 +2764,10 @@ public:
                     addConfiguredPeerLocked(myLocalIpNet);
                 }
 
-                // Enviar paquetes de sincronización 3D a 30 Hz (cada 33 ms) TANTO en HOST como en GUEST,
+                // Enviar paquetes de sincronización 3D a 60 Hz (cada 16 ms) TANTO en HOST como en GUEST,
                 // o inmediatamente cuando un invitado envía PKT_HANDSHAKE (Join-in-Progress)
                 bool forceImmediateJoinSync = pendingJoinInProgressSync_.exchange(false);
-                if (forceImmediateJoinSync || (nowMs - lastUnicastMs >= 33)) {
+                if (forceImmediateJoinSync || (nowMs - lastUnicastMs >= 16)) {
                     lastUnicastMs = nowMs;
                     int mySlot = config_.localPlayerSlot;
                     PedSyncPacket pedPkt = buildPedSyncPacket(mySlot);
@@ -3047,22 +3074,14 @@ public:
                     return true;
                 }
 
-                float dx = ped->position.x - p.x;
-                float dy = ped->position.y - p.y;
-                float dz = ped->position.z - p.z;
-                float distSq = dx * dx + dy * dy + dz * dz;
-                if (distSq > 0.0001f && distSq < 100.0f) {
-                    p.x = p.x + dx * 0.70f;
-                    p.y = p.y + dy * 0.70f;
-                    p.z = p.z + dz * 0.70f;
-                } else {
-                    p.x = ped->position.x;
-                    p.y = ped->position.y;
-                    p.z = ped->position.z;
-                }
+                p.x = ped->position.x;
+                p.y = ped->position.y;
+                p.z = ped->position.z;
                 p.vx = ped->velocity.x;
                 p.vy = ped->velocity.y;
                 p.vz = ped->velocity.z;
+                p.heading = ped->heading;
+                p.lastNetworkUpdateMs = nowMs;
                 p.heading = ped->heading;
                 p.health = ped->health;
                 p.armor = ped->armor;
@@ -3721,12 +3740,41 @@ private:
         else if (key == "Allow_Independent_Vehicles") config_.allowIndependentVehicles = (std::atoi(val.c_str()) == 1);
         else if (key == "Free_Roam_Any_Save") mission_.freeRoamAnySave = (std::atoi(val.c_str()) == 1);
         else if (key == "Player1_Skin_ID") {
-            players_[0].skinModelId = std::atoi(val.c_str());
-            if (config_.localPlayerSlot == 1) config_.localSkinModelId = players_[0].skinModelId;
+            int sid = std::clamp(std::atoi(val.c_str()), 0, 299);
+            if (config_.localPlayerSlot == 1) {
+                config_.localSkinModelId = sid;
+                players_[0].skinModelId = sid;
+            } else if (players_[0].lastNetworkUpdateMs == 0) {
+                players_[0].skinModelId = sid;
+            }
         }
-        else if (key == "Player2_Skin_ID") players_[1].skinModelId = std::atoi(val.c_str());
-        else if (key == "Player3_Skin_ID") players_[2].skinModelId = std::atoi(val.c_str());
-        else if (key == "Player4_Skin_ID") players_[3].skinModelId = std::atoi(val.c_str());
+        else if (key == "Player2_Skin_ID") {
+            int sid = std::clamp(std::atoi(val.c_str()), 0, 299);
+            if (config_.localPlayerSlot == 2) {
+                config_.localSkinModelId = sid;
+                players_[1].skinModelId = sid;
+            } else if (players_[1].lastNetworkUpdateMs == 0) {
+                players_[1].skinModelId = sid;
+            }
+        }
+        else if (key == "Player3_Skin_ID") {
+            int sid = std::clamp(std::atoi(val.c_str()), 0, 299);
+            if (config_.localPlayerSlot == 3) {
+                config_.localSkinModelId = sid;
+                players_[2].skinModelId = sid;
+            } else if (players_[2].lastNetworkUpdateMs == 0) {
+                players_[2].skinModelId = sid;
+            }
+        }
+        else if (key == "Player4_Skin_ID") {
+            int sid = std::clamp(std::atoi(val.c_str()), 0, 299);
+            if (config_.localPlayerSlot == 4) {
+                config_.localSkinModelId = sid;
+                players_[3].skinModelId = sid;
+            } else if (players_[3].lastNetworkUpdateMs == 0) {
+                players_[3].skinModelId = sid;
+            }
+        }
         else if (key == "Local_Skin_ID" || key == "skin_id") {
             int sid = std::clamp(std::atoi(val.c_str()), 0, 299);
             config_.localSkinModelId = sid;

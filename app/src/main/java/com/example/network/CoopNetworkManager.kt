@@ -127,6 +127,7 @@ class CoopNetworkManager(private val scope: CoroutineScope) {
     var onClosestPeerDistanceUpdated: ((Float) -> Unit)? = null
     // Disparado cuando el Host inicia el juego para que todos los teléfonos actualicen coop_config.ini y lancen el Intent de GTA SA
     var onRemoteStartGameReceived: (() -> Unit)? = null
+    var onPartnerSkinUpdated: ((CharacterSkin) -> Unit)? = null
 
     private var serverJob: Job? = null
     private var beaconBroadcastJob: Job? = null
@@ -500,13 +501,26 @@ class CoopNetworkManager(private val scope: CoroutineScope) {
 
                 val welcome = reader.readLine()
                 if (welcome != null && welcome.startsWith("WELCOME")) {
+                    val wParts = welcome.split("|")
+                    val hostSkinEnum = wParts.getOrNull(5)?.let {
+                        try { CharacterSkin.valueOf(it) } catch (_: Exception) { null }
+                    }
                     playChimeTone()
                     withContext(Dispatchers.Main) {
+                        val updatedPlayers = if (hostSkinEnum != null) {
+                            _session.value.players.map { p ->
+                                if (p.isHost) p.copy(skin = hostSkinEnum, name = "${hostSkinEnum.displayName} (Host)") else p
+                            }
+                        } else _session.value.players
                         _session.value = _session.value.copy(
                             isConnectedToHost = true,
                             status = SessionStatus.LOBBY,
+                            players = updatedPlayers,
                             connectionBannerMessage = "🟢 Conectado al Host ($hostIp) • Servidor UDP $UDP_COOP_TORNAMIC_PORT y Voz $UDP_TELEMETRY_VOICE_PORT activos"
                         )
+                    }
+                    if (hostSkinEnum != null) {
+                        onPartnerSkinUpdated?.invoke(hostSkinEnum)
                     }
                 }
 
@@ -611,6 +625,18 @@ class CoopNetworkManager(private val scope: CoroutineScope) {
                         recentPings = listOf(ping) + _session.value.recentPings.take(5)
                     )
                 }
+            }
+            line.startsWith("SKIN_UPDATE|") -> {
+                val skinName = line.substringAfter("SKIN_UPDATE|").trim()
+                val skinEnum = try { CharacterSkin.valueOf(skinName) } catch (_: Exception) { null } ?: return
+                withContext(Dispatchers.Main) {
+                    val updated = _session.value.players.map { p ->
+                        val isRemote = if (_session.value.isHost) !p.isHost else p.isHost
+                        if (isRemote) p.copy(skin = skinEnum, name = "${skinEnum.displayName} (${if (p.isHost) "Host" else "Invitado"})") else p
+                    }
+                    _session.value = _session.value.copy(players = updated)
+                }
+                onPartnerSkinUpdated?.invoke(skinEnum)
             }
             line.startsWith("PING") -> {
                 replyWriter?.println("PONG")
@@ -724,8 +750,10 @@ class CoopNetworkManager(private val scope: CoroutineScope) {
                         connectionBannerMessage = "🟢 ¡Nuevo homie conectado en P$slotNum!: $clientName"
                     )
                 }
+                onPartnerSkinUpdated?.invoke(clientSkin)
 
-                writer.println("WELCOME|${_session.value.roomCode}|Carl 'CJ'|FREEROAM:1|UDP:$UDP_COOP_TORNAMIC_PORT,$UDP_TELEMETRY_VOICE_PORT")
+                val hostSkinName = _session.value.players.firstOrNull { it.isHost }?.skin?.name ?: CharacterSkin.CJ.name
+                writer.println("WELCOME|${_session.value.roomCode}|Carl 'CJ'|FREEROAM:1|UDP:$UDP_COOP_TORNAMIC_PORT,$UDP_TELEMETRY_VOICE_PORT|$hostSkinName")
                 if (_session.value.status == SessionStatus.IN_PROGRESS) {
                     writer.println("START_GAME|FREEROAM:1|${_session.value.currentMission.id}|${_session.value.onMissionFlag}")
                     writer.println(
@@ -742,6 +770,7 @@ class CoopNetworkManager(private val scope: CoroutineScope) {
                         withContext(Dispatchers.Main) {
                             updatePlayerSkin(newPlayer.id, skinEnum)
                         }
+                        onPartnerSkinUpdated?.invoke(skinEnum)
                     } else {
                         handleIncomingControlLine(msg, writer)
                     }
@@ -1431,16 +1460,22 @@ class CoopNetworkManager(private val scope: CoroutineScope) {
 
     fun updateMySkin(skin: CharacterSkin) {
         val updatedPlayers = _session.value.players.map { player ->
-            if (player.id == "p1") player.copy(skin = skin, name = "${skin.displayName} (Tú)") else player
+            if (player.id == "p1" || player.isHost == _session.value.isHost) {
+                player.copy(skin = skin, name = "${skin.displayName} (Tú)")
+            } else player
         }
         _session.value = _session.value.copy(players = updatedPlayers)
 
-        if (!_session.value.isHost && _session.value.isConnectedToHost) {
-            scope.launch(Dispatchers.IO) {
-                clientWriter?.println("SKIN_UPDATE|${skin.name}")
-                if (_session.value.networkMode == NetworkConnectionMode.ONLINE_REMOTE) {
-                    sendOnlineRelayFrame("SKIN_UPDATE|${skin.name}")
+        scope.launch(Dispatchers.IO) {
+            if (_session.value.isHost) {
+                connectedClients.forEach { sock ->
+                    try { PrintWriter(sock.getOutputStream(), true).println("SKIN_UPDATE|${skin.name}") } catch (_: Exception) {}
                 }
+            } else if (_session.value.isConnectedToHost) {
+                clientWriter?.println("SKIN_UPDATE|${skin.name}")
+            }
+            if (_session.value.networkMode == NetworkConnectionMode.ONLINE_REMOTE) {
+                sendOnlineRelayFrame("SKIN_UPDATE|${skin.name}")
             }
         }
     }

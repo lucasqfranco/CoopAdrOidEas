@@ -560,9 +560,7 @@ class ModFileManager(private val context: Context) {
     fun setMySkin(skin: CharacterSkin) {
         _status.value = _status.value.copy(mySelectedSkin = skin, customSkinId = null)
         syncLocalSkinToBridge()
-        if (_status.value.isModInstalled) {
-            writeConfigIni()
-        }
+        writeConfigIni()
     }
 
     fun setCustomSkinId(skinId: Int?) {
@@ -577,9 +575,7 @@ class ModFileManager(private val context: Context) {
             customSkinId = clamped
         )
         syncLocalSkinToBridge()
-        if (_status.value.isModInstalled) {
-            writeConfigIni()
-        }
+        writeConfigIni()
     }
 
     fun getEffectiveLocalSkinModelId(): Int {
@@ -598,34 +594,30 @@ class ModFileManager(private val context: Context) {
     private fun syncLocalSkinToBridge() {
         val effectiveSkinId = getEffectiveLocalSkinModelId()
         val mySlot = if (_status.value.isHostDevice) 1 else 2
+        val partnerSlot = if (_status.value.isHostDevice) 2 else 1
         CoopNativeBridge.updateLocalPlayer(
             Player3DTelemetry(
                 slot = mySlot,
                 skinId = effectiveSkinId
             )
         )
-        if (mySlot != 1) {
-            CoopNativeBridge.updateLocalPlayer(
-                Player3DTelemetry(
-                    slot = 1,
-                    skinId = effectiveSkinId
-                )
+        CoopNativeBridge.updateLocalPlayer(
+            Player3DTelemetry(
+                slot = partnerSlot,
+                skinId = getSkinModelId(_status.value.partnerSkin)
             )
-        }
+        )
     }
 
     fun setMyMarkerColor(color: PlayerMarkerColor) {
         _status.value = _status.value.copy(myMarkerColor = color)
-        if (_status.value.isModInstalled) {
-            writeConfigIni()
-        }
+        writeConfigIni()
     }
 
     fun setPartnerSkin(skin: CharacterSkin) {
         _status.value = _status.value.copy(partnerSkin = skin)
-        if (_status.value.isModInstalled) {
-            writeConfigIni()
-        }
+        syncLocalSkinToBridge()
+        writeConfigIni()
     }
 
     fun setCameraMode(mode: String) {
@@ -916,12 +908,12 @@ class ModFileManager(private val context: Context) {
             Custom_Opcodes_Range = 0D00-0D04
 
             [PLAYER_IDENTITY]
-            Player1_Skin_ID = ${getEffectiveLocalSkinModelId()}
-            Local_Skin_ID = ${getEffectiveLocalSkinModelId()}
-            Player1_Name = ${_status.value.mySelectedSkin.displayName}
+            Local_Skin_ID = ${getSkinModelId(_status.value.mySelectedSkin)}
+            Player1_Skin_ID = ${if (isHost) getEffectiveLocalSkinModelId() else getSkinModelId(_status.value.partnerSkin)}
+            Player1_Name = ${if (isHost) _status.value.mySelectedSkin.displayName else _status.value.partnerSkin.displayName}
             Player_Marker_Color = ${_status.value.myMarkerColor.radarColorId}
-            Player2_Skin_ID = ${getSkinModelId(_status.value.partnerSkin)}
-            Player2_Name = ${_status.value.partnerSkin.displayName}
+            Player2_Skin_ID = ${if (isHost) getSkinModelId(_status.value.partnerSkin) else getEffectiveLocalSkinModelId()}
+            Player2_Name = ${if (isHost) _status.value.partnerSkin.displayName else _status.value.mySelectedSkin.displayName}
             Player3_Skin_ID = ${getSkinModelId(_status.value.player3Skin)}
             Player4_Skin_ID = ${getSkinModelId(_status.value.player4Skin)}
             Default_Weapon = 28 ; Micro SMG / Uzi
@@ -1016,6 +1008,14 @@ class ModFileManager(private val context: Context) {
         }
         CoopNativeBridge.loadIniConfigs(iniFile.absolutePath, sampIni.absolutePath)
         CoopNativeBridge.writeTelemetryBinaryFile(File(modDir, "coop_telemetry.bin"))
+        try {
+            val unprotectedFilesDir = File("/storage/emulated/0/Android_unprotected/data/com.rockstargames.gtasa/files")
+            if (unprotectedFilesDir.exists()) {
+                writeConfigFile(File(unprotectedFilesDir, "coop_config.ini"))
+                writeConfigFile(File(File(unprotectedFilesDir, "cleo"), "coop_config.ini"))
+                writeSampSettingsIni(File(File(unprotectedFilesDir, "SAMP"), "settings.ini"))
+            }
+        } catch (_: Exception) {}
     }
 
     private fun writeFxtFile(target: File) {

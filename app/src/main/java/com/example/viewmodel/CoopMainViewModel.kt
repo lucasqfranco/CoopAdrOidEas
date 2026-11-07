@@ -107,6 +107,11 @@ class CoopMainViewModel(application: Application) : AndroidViewModel(application
         coopNetworkManager.onRemoteStartGameReceived = {
             launchGame()
         }
+        coopNetworkManager.onPartnerSkinUpdated = { partnerSkin ->
+            viewModelScope.launch(Dispatchers.IO) {
+                modFileManager.setPartnerSkin(partnerSkin)
+            }
+        }
         syncVoiceTransportConfig()
 
         runAutoDiagnostics(silent = true)
@@ -285,7 +290,9 @@ class CoopMainViewModel(application: Application) : AndroidViewModel(application
 
     fun changeMySkin(skin: CharacterSkin) {
         coopNetworkManager.updateMySkin(skin)
-        modFileManager.setMySkin(skin)
+        viewModelScope.launch(Dispatchers.IO) {
+            modFileManager.setMySkin(skin)
+        }
         showNotification("Skin seleccionado: ${skin.displayName}")
     }
 
