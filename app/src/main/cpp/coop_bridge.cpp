@@ -409,6 +409,7 @@ struct GtaSaNativeSymbols {
     FnCWorldClearCarsFromArea cworldClearCarsFromAreaFn = nullptr;
     FnCCutsceneMgrSkipCutscene ccutsceneMgrSkipCutsceneFn = nullptr;
     FnCCheatVoid ccheatHealthCheatFn = nullptr;
+    FnCCheatVoid ccheatMoneyArmourHealthCheatFn = nullptr;
     FnCCheatVoid ccheatWeaponCheat1Fn = nullptr;
     FnCCheatVoid ccheatWeaponCheat2Fn = nullptr;
     FnCCheatVoid ccheatWeaponCheat3Fn = nullptr;
@@ -418,7 +419,13 @@ struct GtaSaNativeSymbols {
     FnCCheatVoid ccheatSunnyCheatFn = nullptr;
     FnCCheatVoid ccheatRainCheatFn = nullptr;
     FnCCheatVoid ccheatRiotCheatFn = nullptr;
+    FnCCheatVoid ccheatTankCheatFn = nullptr;
+    FnCCheatVoid ccheatFlyboyCheatFn = nullptr;
+    FnCCheatVoid ccheatApacheCheatFn = nullptr;
+    FnCCheatVoid ccheatStockCarCheatFn = nullptr;
+    FnCCheatVoid ccheatQuadCheatFn = nullptr;
     FnCCheatVehicle ccheatVehicleCheatFn = nullptr;
+    void** cmodelInfoPtrs = nullptr;
 
     uint8_t* cutsceneRunning = nullptr;             // _ZN12CCutsceneMgr10ms_runningE
     uint8_t* bPlayersCanBeInSeparateCars = nullptr; // _ZN10CGameLogic27bPlayersCanBeInSeparateCarsE
@@ -526,17 +533,29 @@ struct GtaSaNativeSymbols {
         cpoolsGetVehicleFn = reinterpret_cast<FnCPoolsGetVehicle>(dlsym(libHandle, "_ZN6CPools10GetVehicleEi"));
         cworldClearCarsFromAreaFn = reinterpret_cast<FnCWorldClearCarsFromArea>(dlsym(libHandle, "_ZN6CWorld17ClearCarsFromAreaEffffff"));
         ccutsceneMgrSkipCutsceneFn = reinterpret_cast<FnCCutsceneMgrSkipCutscene>(dlsym(libHandle, "_ZN12CCutsceneMgr12SkipCutsceneEv"));
+        cmodelInfoPtrs = reinterpret_cast<void**>(dlsym(libHandle, "_ZN10CModelInfo16ms_modelInfoPtrsE"));
         ccheatHealthCheatFn = reinterpret_cast<FnCCheatVoid>(dlsym(libHandle, "_ZN6CCheat11HealthCheatEv"));
+        ccheatMoneyArmourHealthCheatFn = reinterpret_cast<FnCCheatVoid>(dlsym(libHandle, "_ZN6CCheat22MoneyArmourHealthCheatEv"));
         ccheatWeaponCheat1Fn = reinterpret_cast<FnCCheatVoid>(dlsym(libHandle, "_ZN6CCheat12WeaponCheat1Ev"));
         ccheatWeaponCheat2Fn = reinterpret_cast<FnCCheatVoid>(dlsym(libHandle, "_ZN6CCheat12WeaponCheat2Ev"));
         ccheatWeaponCheat3Fn = reinterpret_cast<FnCCheatVoid>(dlsym(libHandle, "_ZN6CCheat12WeaponCheat3Ev"));
         ccheatJetpackCheatFn = reinterpret_cast<FnCCheatVoid>(dlsym(libHandle, "_ZN6CCheat12JetpackCheatEv"));
-        ccheatNotWantedCheatFn = reinterpret_cast<FnCCheatVoid>(dlsym(libHandle, "_ZN6CCheat14NotWantedCheatEv"));
-        ccheatWantedCheatFn = reinterpret_cast<FnCCheatVoid>(dlsym(libHandle, "_ZN6CCheat11WantedCheatEv"));
-        ccheatSunnyCheatFn = reinterpret_cast<FnCCheatVoid>(dlsym(libHandle, "_ZN6CCheat10SunnyCheatEv"));
-        ccheatRainCheatFn = reinterpret_cast<FnCCheatVoid>(dlsym(libHandle, "_ZN6CCheat9RainCheatEv"));
+        ccheatNotWantedCheatFn = reinterpret_cast<FnCCheatVoid>(dlsym(libHandle, "_ZN6CCheat20WantedLevelDownCheatEv"));
+        if (!ccheatNotWantedCheatFn) ccheatNotWantedCheatFn = reinterpret_cast<FnCCheatVoid>(dlsym(libHandle, "_ZN6CCheat14NotWantedCheatEv"));
+        ccheatWantedCheatFn = reinterpret_cast<FnCCheatVoid>(dlsym(libHandle, "_ZN6CCheat18WantedLevelUpCheatEv"));
+        if (!ccheatWantedCheatFn) ccheatWantedCheatFn = reinterpret_cast<FnCCheatVoid>(dlsym(libHandle, "_ZN6CCheat11WantedCheatEv"));
+        ccheatSunnyCheatFn = reinterpret_cast<FnCCheatVoid>(dlsym(libHandle, "_ZN6CCheat17SunnyWeatherCheatEv"));
+        if (!ccheatSunnyCheatFn) ccheatSunnyCheatFn = reinterpret_cast<FnCCheatVoid>(dlsym(libHandle, "_ZN6CCheat10SunnyCheatEv"));
+        ccheatRainCheatFn = reinterpret_cast<FnCCheatVoid>(dlsym(libHandle, "_ZN6CCheat10StormCheatEv"));
+        if (!ccheatRainCheatFn) ccheatRainCheatFn = reinterpret_cast<FnCCheatVoid>(dlsym(libHandle, "_ZN6CCheat17RainyWeatherCheatEv"));
         ccheatRiotCheatFn = reinterpret_cast<FnCCheatVoid>(dlsym(libHandle, "_ZN6CCheat9RiotCheatEv"));
+        if (!ccheatRiotCheatFn) ccheatRiotCheatFn = reinterpret_cast<FnCCheatVoid>(dlsym(libHandle, "_ZN6CCheat11MayhemCheatEv"));
         ccheatVehicleCheatFn = reinterpret_cast<FnCCheatVehicle>(dlsym(libHandle, "_ZN6CCheat12VehicleCheatEi"));
+        ccheatTankCheatFn = reinterpret_cast<FnCCheatVoid>(dlsym(libHandle, "_ZN6CCheat9TankCheatEv"));
+        ccheatFlyboyCheatFn = reinterpret_cast<FnCCheatVoid>(dlsym(libHandle, "_ZN6CCheat11FlyboyCheatEv"));
+        ccheatApacheCheatFn = reinterpret_cast<FnCCheatVoid>(dlsym(libHandle, "_ZN6CCheat11ApacheCheatEv"));
+        ccheatStockCarCheatFn = reinterpret_cast<FnCCheatVoid>(dlsym(libHandle, "_ZN6CCheat13StockCarCheatEv"));
+        ccheatQuadCheatFn = reinterpret_cast<FnCCheatVoid>(dlsym(libHandle, "_ZN6CCheat9QuadCheatEv"));
         cutsceneRunning = reinterpret_cast<uint8_t*>(dlsym(libHandle, "_ZN12CCutsceneMgr10ms_runningE"));
 
         bPlayersCanBeInSeparateCars = reinterpret_cast<uint8_t*>(dlsym(libHandle, "_ZN10CGameLogic27bPlayersCanBeInSeparateCarsE"));
@@ -573,8 +592,15 @@ struct GtaSaNativeSymbols {
 
     bool isModelLoaded(int modelId) const {
         if (!cstreamingInfoForModel || modelId < 0 || modelId > 20000) return false;
+        if (cmodelInfoPtrs && cmodelInfoPtrs[modelId] == nullptr) return false;
         // Each CStreamingInfo is 20 bytes; m_nLoadState (uint8_t) is at offset 0x10 (1 == LOADSTATE_LOADED)
         return cstreamingInfoForModel[modelId * 20 + 16] == 1;
+    }
+
+    bool isValidModelInfo(int modelId) const {
+        if (modelId < 0 || modelId > 20000) return false;
+        if (cmodelInfoPtrs && cmodelInfoPtrs[modelId] == nullptr) return false;
+        return true;
     }
 };
 
@@ -1527,7 +1553,9 @@ public:
             if (!cheatCmd.empty()) {
                 for (char& c : cheatCmd) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
                 if (cheatCmd == "HESOYAM") {
-                    if (gtaSymbols_.ccheatHealthCheatFn) {
+                    if (gtaSymbols_.ccheatMoneyArmourHealthCheatFn) {
+                        gtaSymbols_.ccheatMoneyArmourHealthCheatFn();
+                    } else if (gtaSymbols_.ccheatHealthCheatFn) {
                         gtaSymbols_.ccheatHealthCheatFn();
                     }
                     *reinterpret_cast<float*>(localPedAddr + 0x6ac) = 200.0f;
@@ -1556,14 +1584,33 @@ public:
                                    (cheatCmd == "JUMPJET") ? 520 :
                                    (cheatCmd == "OHDUDE") ? 425 :
                                    (cheatCmd == "PDNEJOH") ? 494 : 471;
-                    if (gtaSymbols_.ccheatVehicleCheatFn) {
-                        gtaSymbols_.ccheatVehicleCheatFn(vehModel);
-                    } else if (gtaSymbols_.cstreamingRequestModelFn) {
-                        gtaSymbols_.cstreamingRequestModelFn(vehModel, 2);
-                        if (gtaSymbols_.cstreamingLoadAllRequestedModelsFn) {
-                            gtaSymbols_.cstreamingLoadAllRequestedModelsFn(false);
+                    bool invokedDedicated = false;
+                    if (cheatCmd == "AIWPRTON" && gtaSymbols_.ccheatTankCheatFn) {
+                        gtaSymbols_.ccheatTankCheatFn();
+                        invokedDedicated = true;
+                    } else if (cheatCmd == "JUMPJET" && gtaSymbols_.ccheatFlyboyCheatFn) {
+                        gtaSymbols_.ccheatFlyboyCheatFn();
+                        invokedDedicated = true;
+                    } else if (cheatCmd == "OHDUDE" && gtaSymbols_.ccheatApacheCheatFn) {
+                        gtaSymbols_.ccheatApacheCheatFn();
+                        invokedDedicated = true;
+                    } else if (cheatCmd == "PDNEJOH" && gtaSymbols_.ccheatStockCarCheatFn) {
+                        gtaSymbols_.ccheatStockCarCheatFn();
+                        invokedDedicated = true;
+                    } else if (cheatCmd == "FOURWHEELFUN" && gtaSymbols_.ccheatQuadCheatFn) {
+                        gtaSymbols_.ccheatQuadCheatFn();
+                        invokedDedicated = true;
+                    }
+                    if (!invokedDedicated) {
+                        if (gtaSymbols_.ccheatVehicleCheatFn) {
+                            gtaSymbols_.ccheatVehicleCheatFn(vehModel);
+                        } else if (gtaSymbols_.cstreamingRequestModelFn) {
+                            gtaSymbols_.cstreamingRequestModelFn(vehModel, 2);
+                            if (gtaSymbols_.cstreamingLoadAllRequestedModelsFn) {
+                                gtaSymbols_.cstreamingLoadAllRequestedModelsFn(false);
+                            }
+                            pendingVehicleSpawnModel_ = vehModel;
                         }
-                        pendingVehicleSpawnModel_ = vehModel;
                     }
                 } else if (cheatCmd == "AFZLLQLL") {
                     if (gtaSymbols_.ccheatSunnyCheatFn) gtaSymbols_.ccheatSunnyCheatFn();
@@ -2435,11 +2482,18 @@ public:
             if (!ped && gtaSymbols_.cpedOperatorNewFn && gtaSymbols_.ccivilianPedCtorFn && gtaSymbols_.cworldAddFn) {
                 uint32_t spawnModel = 0;
                 int32_t desiredRemModel = resolveSafePedModelId(rem.skinModelId);
+                if (desiredRemModel > 0 && !gtaSymbols_.isValidModelInfo(desiredRemModel)) {
+                    desiredRemModel = 105; // Fallback seguro a FAM1 (Grove Street)
+                }
                 if (desiredRemModel > 0) {
+                    if (!gtaSymbols_.isModelLoaded(desiredRemModel) && gtaSymbols_.cstreamingRequestModelFn) {
+                        gtaSymbols_.cstreamingRequestModelFn(desiredRemModel, 2);
+                        if (gtaSymbols_.cstreamingLoadAllRequestedModelsFn) {
+                            gtaSymbols_.cstreamingLoadAllRequestedModelsFn(false);
+                        }
+                    }
                     if (gtaSymbols_.isModelLoaded(desiredRemModel)) {
                         spawnModel = static_cast<uint32_t>(desiredRemModel);
-                    } else if (gtaSymbols_.cstreamingRequestModelFn) {
-                        gtaSymbols_.cstreamingRequestModelFn(desiredRemModel, 2);
                     }
                 }
                 void* newPed = gtaSymbols_.cpedOperatorNewFn(0x9c8);
@@ -2530,10 +2584,16 @@ public:
                 // Sincronizar modelo de skin del compañero remoto (si eligió skin distinta de CJ)
                 if (rem.skinModelId > 0 && !remCurrentlyInVeh) {
                     int32_t targetRemModel = resolveSafePedModelId(rem.skinModelId);
+                    if (targetRemModel > 0 && !gtaSymbols_.isValidModelInfo(targetRemModel)) {
+                        targetRemModel = 105;
+                    }
                     if (targetRemModel > 0 && remotePedSpawnedModel_[i] != targetRemModel) {
                         if (!gtaSymbols_.isModelLoaded(targetRemModel)) {
                             if ((tickCount % 5 == 0) && gtaSymbols_.cstreamingRequestModelFn) {
                                 gtaSymbols_.cstreamingRequestModelFn(targetRemModel, 2);
+                                if (gtaSymbols_.cstreamingLoadAllRequestedModelsFn) {
+                                    gtaSymbols_.cstreamingLoadAllRequestedModelsFn(false);
+                                }
                             }
                         } else if (gtaSymbols_.cpedSetModelIndexFn) {
                             gtaSymbols_.cpedSetModelIndexFn(ped, static_cast<uint32_t>(targetRemModel));
@@ -3789,24 +3849,40 @@ private:
     static int32_t resolveSafePedModelId(int32_t modelId) {
         if (modelId <= 0) return 0;
         switch (modelId) {
-            case 1: return 7;     // The Truth -> male01 fallback if special slot unloaded
-            case 2: return 7;     // Maccer -> male01 fallback
-            case 265: return 280; // Tenpenny -> LAPD
-            case 266: return 280; // Pulaski -> LAPD
-            case 267: return 280; // Hernandez -> LAPD
-            case 269: return 149; // Big Smoke -> Smoke Vest (peds.ide)
-            case 270: return 105; // Sweet -> Grove Homie FAM1
-            case 271: return 106; // Ryder -> Grove Homie FAM2
-            case 289: return 170; // Zero -> SOMYST
-            case 290: return 187; // Ken Rosenberg -> SOFYBU
-            case 291: return 29;  // Kent Paul -> WMIDRUG
-            case 292: return 115; // Cesar -> Azteca VLA2
-            case 293: return 107; // OG Loc -> Grove FAM3
-            case 294: return 118; // Woozie -> Triad TRIADB
-            case 295: return 165; // Mike Toreno -> WMOMIB
-            case 297: return 22;  // Madd Dogg -> BMYST
-            case 298: return 192; // Catalina -> WFYPRO (peds.ide 192)
-            case 299: return 100; // Claude Speed -> BIKERA
+            case 1:
+            case 2:
+            case 3:
+            case 4:
+            case 5:
+            case 6:
+            case 8:
+            case 42:
+            case 65:
+            case 86: return 7;     // Special unallocated slots -> male01 (7)
+            case 74:
+            case 119:
+            case 208: return 105;  // Missing peds.ide IDs -> FAM1 (105)
+            case 149:
+            case 269: return 107;  // Big Smoke (149 commented out in peds.ide) -> FAM3 Grove Homie (107)
+            case 265: return 280;  // Tenpenny -> LAPD1 (280)
+            case 266: return 280;  // Pulaski -> LAPD1 (280)
+            case 267: return 280;  // Hernandez -> LAPD1 (280)
+            case 268: return 50;   // Dwaine -> Mechanic (50)
+            case 270: return 105;  // Sweet -> Grove Homie FAM1 (105)
+            case 271: return 106;  // Ryder -> Grove Homie FAM2 (106)
+            case 272: return 112;  // Forelli -> Mafia MAFFY (112)
+            case 273: return 107;  // T-Bone -> FAM3 (107)
+            case 289: return 170;  // Zero -> SOMYST (170)
+            case 290: return 187;  // Ken Rosenberg -> SOFYBU (187)
+            case 291: return 29;   // Kent Paul -> WMIDRUG (29)
+            case 292: return 115;  // Cesar -> Azteca VLA2 (115)
+            case 293: return 107;  // OG Loc -> Grove FAM3 (107)
+            case 294: return 118;  // Woozie -> Triad TRIADB (118)
+            case 295: return 165;  // Mike Toreno -> WMOMIB (165)
+            case 296: return 23;   // Jizzy -> BMYDJ (23)
+            case 297: return 22;   // Madd Dogg -> BMYST (22)
+            case 298: return 192;  // Catalina -> WFYPRO (192)
+            case 299: return 100;  // Claude Speed -> BIKERA (100)
             default:
                 return std::clamp(modelId, 0, 288);
         }

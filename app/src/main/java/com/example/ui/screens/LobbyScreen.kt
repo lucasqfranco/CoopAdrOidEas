@@ -609,6 +609,114 @@ fun LobbyScreen(
             )
         }
 
+        // =====================================================================
+        // PANEL DE TRUCOS RÁPIDOS DIRECTO EN EL LOBBY (SIN TECLADO FÍSICO)
+        // =====================================================================
+        var showLobbyCheats by remember { mutableStateOf(false) }
+        var lobbyCheatInput by remember { mutableStateOf("") }
+
+        OutlinedButton(
+            onClick = { showLobbyCheats = !showLobbyCheats },
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(44.dp),
+            shape = RoundedCornerShape(12.dp),
+            border = BorderStroke(1.dp, SanAndreasGold)
+        ) {
+            Text(
+                text = if (showLobbyCheats) "🎮 OCULTAR TRUCOS RÁPIDOS (SIN TECLADO)" else "🎮 TRUCOS RÁPIDOS DE GTA SA (SIN TECLADO)",
+                fontFamily = BebasNeueFontFamily,
+                fontSize = 15.sp,
+                color = SanAndreasGold
+            )
+        }
+
+        if (showLobbyCheats) {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = DarkSurfaceElevated),
+                shape = RoundedCornerShape(14.dp),
+                border = BorderStroke(1.dp, Color(0xFF28382C))
+            ) {
+                Column(
+                    modifier = Modifier.padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    val cheatGroups = listOf(
+                        "Locales (Salud, Armas, Jetpack, Estrellas)" to listOf(
+                            "HESOYAM" to "Vida/Chaleco + \$250k",
+                            "LXGIWYL" to "Armas 1",
+                            "KJKSZPJ" to "Armas 2",
+                            "UZUMYMW" to "Armas 3",
+                            "ROCKETMAN" to "Jetpack",
+                            "AEZAKMI" to "0 Estrellas",
+                            "OSRBLHH" to "+2 Estrellas"
+                        ),
+                        "Vehículos (Aparecen frente a CJ)" to listOf(
+                            "AIWPRTON" to "Rhino (432)",
+                            "JUMPJET" to "Hydra (520)",
+                            "OHDUDE" to "Hunter (425)",
+                            "PDNEJOH" to "Hotring (494)",
+                            "FOURWHEELFUN" to "Quad (471)"
+                        ),
+                        "Mundo Cooperativo (Clima y Caos)" to listOf(
+                            "AFZLLQLL" to "Soleado",
+                            "AUIFRVQS" to "Tormenta",
+                            "IOJUFZN" to "Modo Caos"
+                        )
+                    )
+                    cheatGroups.forEach { (title, list) ->
+                        Text(title, style = MaterialTheme.typography.labelSmall, color = SanAndreasGold)
+                        FlowRow(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            list.forEach { (code, desc) ->
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(Color(0xFF1A281E))
+                                        .clickable { viewModel.triggerCheatFromApp(code) }
+                                        .padding(horizontal = 9.dp, vertical = 6.dp)
+                                ) {
+                                    Text("$code • $desc", style = MaterialTheme.typography.labelSmall, color = Color.White)
+                                }
+                            }
+                        }
+                    }
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        OutlinedTextField(
+                            value = lobbyCheatInput,
+                            onValueChange = { lobbyCheatInput = it },
+                            label = { Text("Código manual (ej. HESOYAM)") },
+                            singleLine = true,
+                            modifier = Modifier.weight(1f),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = GroveGreen,
+                                focusedTextColor = Color.White,
+                                unfocusedTextColor = Color.White
+                            )
+                        )
+                        Button(
+                            onClick = {
+                                viewModel.triggerCheatFromApp(lobbyCheatInput)
+                                lobbyCheatInput = ""
+                            },
+                            colors = ButtonDefaults.buttonColors(containerColor = GroveGreen, contentColor = Color.Black),
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Text("APLICAR", fontFamily = BebasNeueFontFamily, fontSize = 14.sp)
+                        }
+                    }
+                }
+            }
+        }
+
         Text(
             text = "Nota: Dentro de GTA SA podés tocar 'Reanudar' (Resume) o 'Iniciar Partida -> Nueva Partida'; el modo cooperativo sincroniza a ambos jugadores automáticamente apenas aparecen en el mapa.",
             style = MaterialTheme.typography.bodySmall,
