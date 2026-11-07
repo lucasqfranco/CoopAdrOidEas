@@ -3558,7 +3558,7 @@ private:
         fprintf(logf, "=== COOPANDREAS NATIVE BRIDGE ACTIVE IN GTA SA ===\nLocalIP: %s\n%s\n", myIp.c_str(), summary.c_str());
         fprintf(logf, "Session: Role=%s | Slot=%d | Room=%s | HostIP=%s | ActivePeers=%zu | JoinInProgress=READY | OnMission=%d | Mission=%s\n",
                 config_.isHost ? "HOST" : "GUEST", config_.localPlayerSlot, config_.roomCode.c_str(),
-                config_.hostIp.c_str(), activePeers_.size(), mission_.onMissionFlag, mission_.missionId.c_str());
+                config_.hostIp.c_str(), activePeers_.size(), mission_.onMissionFlag, mission_.missionId);
         for (int i = 0; i < kMaxCoopPlayers; ++i) {
             int32_t reqSkin = players_[i].skinModelId;
             int32_t safeSkin = resolveSafePedModelId(reqSkin);
