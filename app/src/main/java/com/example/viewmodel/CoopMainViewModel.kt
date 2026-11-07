@@ -112,6 +112,12 @@ class CoopMainViewModel(application: Application) : AndroidViewModel(application
         runAutoDiagnostics(silent = true)
 
         viewModelScope.launch(Dispatchers.IO) {
+            try {
+                modFileManager.installDirectToAndroidUnprotected()
+            } catch (_: Exception) {}
+        }
+
+        viewModelScope.launch(Dispatchers.IO) {
             while (isActive) {
                 delay(10000)
                 try {
@@ -301,6 +307,45 @@ class CoopMainViewModel(application: Application) : AndroidViewModel(application
 
     fun sendPing(type: TacticalPingType) {
         coopNetworkManager.sendTacticalPing(type)
+    }
+
+    fun triggerCheatFromApp(rawCode: String) {
+        val code = rawCode.trim().uppercase()
+        if (code.isEmpty()) return
+        viewModelScope.launch(Dispatchers.IO) {
+            modFileManager.writeCheatCommandFile(code)
+            try {
+                CoopNativeBridge.classifyAndSyncCheat(code, if (sessionState.value.isHost) 1 else 2)
+            } catch (_: Throwable) {}
+            if (code in setOf("AFZLLQLL", "AUIFRVQS", "IOJUFZN")) {
+                coopNetworkManager.sendTacticalPing(TacticalPingType.OBJECTIVE)
+            }
+        }
+        showNotification("⚡ Truco enviado a GTA SA: $code")
+    }
+
+    fun parseAndJoinQrPayload(qrPayload: String) {
+        val raw = qrPayload.trim()
+        if (!raw.startsWith("COOP|", ignoreCase = true)) {
+            if (raw.contains(".")) {
+                joinRoom(sessionState.value.roomCode, raw)
+            } else if (raw.isNotEmpty()) {
+                joinRoom(raw, null)
+            }
+            return
+        }
+        val parts = raw.split("|")
+        if (parts.size >= 4) {
+            val hostIp = parts[1].trim()
+            val roomCode = parts[3].trim()
+            val modeName = parts.getOrNull(4)?.trim().orEmpty()
+            val mode = NetworkConnectionMode.entries.firstOrNull { it.name.equals(modeName, ignoreCase = true) }
+            if (mode != null) {
+                setNetworkConnectionMode(mode)
+            }
+            joinRoom(roomCode, if (mode == NetworkConnectionMode.ONLINE_REMOTE) null else hostIp)
+            showNotification("📱 QR vinculado: Sala $roomCode ($hostIp)")
+        }
     }
 
     fun chooseMissionForSession(mission: Mission) {

@@ -1,6 +1,7 @@
 package com.example.ui.screens
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -30,6 +31,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
@@ -42,7 +44,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -322,6 +328,117 @@ fun LobbyScreen(
                             text = "✅ Vinculado a la sala ${session.roomCode}",
                             color = GroveGreen,
                             style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+                var showQrPanel by remember { mutableStateOf(false) }
+                val clipboardManager = LocalClipboardManager.current
+                val qrPayload = "COOP|${modStatus.localIpAddress}|51515|${session.roomCode}|${session.networkMode.name}"
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = { showQrPanel = !showQrPanel },
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(10.dp),
+                        border = BorderStroke(1.dp, SanAndreasGold)
+                    ) {
+                        Text(
+                            text = if (showQrPanel) "📱 Ocultar QR de Sala" else "📱 QR de Sala",
+                            fontFamily = BebasNeueFontFamily,
+                            fontSize = 14.sp,
+                            color = SanAndreasGold
+                        )
+                    }
+                    OutlinedButton(
+                        onClick = {
+                            if (isHost) {
+                                clipboardManager.setText(AnnotatedString(qrPayload))
+                                viewModel.showNotification("📋 Código QR copiado: $qrPayload")
+                            } else {
+                                val clipText = clipboardManager.getText()?.text?.trim().orEmpty()
+                                val payloadToUse = if (clipText.startsWith("COOP|", ignoreCase = true)) clipText else roomOrIpInput.trim()
+                                if (payloadToUse.isNotEmpty()) {
+                                    roomOrIpInput = payloadToUse
+                                    viewModel.parseAndJoinQrPayload(payloadToUse)
+                                }
+                            }
+                        },
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(10.dp),
+                        border = BorderStroke(1.dp, GroveGreen)
+                    ) {
+                        Text(
+                            text = if (isHost) "📋 Copiar QR 1-Toque" else "📋 Pegar QR 1-Toque",
+                            fontFamily = BebasNeueFontFamily,
+                            fontSize = 14.sp,
+                            color = GroveGreen
+                        )
+                    }
+                }
+
+                if (showQrPanel) {
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(Color(0xFF121A14))
+                            .padding(12.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Canvas(
+                            modifier = Modifier
+                                .size(154.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(Color.White)
+                                .padding(8.dp)
+                        ) {
+                            val gridSize = 21
+                            val cellW = size.width / gridSize
+                            val cellH = size.height / gridSize
+                            fun isFinder(r: Int, c: Int): Boolean {
+                                val inTL = r in 0..6 && c in 0..6
+                                val inTR = r in 0..6 && c in (gridSize - 7) until gridSize
+                                val inBL = r in (gridSize - 7) until gridSize && c in 0..6
+                                return inTL || inTR || inBL
+                            }
+                            fun finderDark(r: Int, c: Int): Boolean {
+                                val lr = if (r >= gridSize - 7) r - (gridSize - 7) else r
+                                val lc = if (c >= gridSize - 7) c - (gridSize - 7) else c
+                                return lr == 0 || lr == 6 || lc == 0 || lc == 6 || (lr in 2..4 && lc in 2..4)
+                            }
+                            val bytes = qrPayload.encodeToByteArray()
+                            for (r in 0 until gridSize) {
+                                for (c in 0 until gridSize) {
+                                    val dark = if (isFinder(r, c)) {
+                                        finderDark(r, c)
+                                    } else if (r == 6 || c == 6) {
+                                        (r + c) % 2 == 0
+                                    } else {
+                                        val idx = (r * gridSize + c)
+                                        val b = bytes[idx % bytes.size].toInt() and 0xFF
+                                        ((b shr (idx % 8)) xor (r * 3 + c * 7)) and 1 == 1
+                                    }
+                                    if (dark) {
+                                        drawRect(
+                                            color = Color.Black,
+                                            topLeft = Offset(c * cellW, r * cellH),
+                                            size = Size(cellW * 0.96f, cellH * 0.96f)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = qrPayload,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = SanAndreasGold
                         )
                     }
                 }

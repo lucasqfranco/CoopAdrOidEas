@@ -379,6 +379,8 @@ struct GtaSaNativeSymbols {
     using FnCPoolsGetVehicle = void* (*)(int handle);
     using FnCWorldClearCarsFromArea = void (*)(float x1, float y1, float z1, float x2, float y2, float z2);
     using FnCCutsceneMgrSkipCutscene = void (*)();
+    using FnCCheatVoid = void (*)();
+    using FnCCheatVehicle = void (*)(int modelId);
 
     FnCTaskOperatorNew ctaskOperatorNewFn = nullptr;
     FnCTaskSimpleStandStillCtor ctaskSimpleStandStillCtorFn = nullptr;
@@ -406,6 +408,17 @@ struct GtaSaNativeSymbols {
     FnCPoolsGetVehicle cpoolsGetVehicleFn = nullptr;
     FnCWorldClearCarsFromArea cworldClearCarsFromAreaFn = nullptr;
     FnCCutsceneMgrSkipCutscene ccutsceneMgrSkipCutsceneFn = nullptr;
+    FnCCheatVoid ccheatHealthCheatFn = nullptr;
+    FnCCheatVoid ccheatWeaponCheat1Fn = nullptr;
+    FnCCheatVoid ccheatWeaponCheat2Fn = nullptr;
+    FnCCheatVoid ccheatWeaponCheat3Fn = nullptr;
+    FnCCheatVoid ccheatJetpackCheatFn = nullptr;
+    FnCCheatVoid ccheatNotWantedCheatFn = nullptr;
+    FnCCheatVoid ccheatWantedCheatFn = nullptr;
+    FnCCheatVoid ccheatSunnyCheatFn = nullptr;
+    FnCCheatVoid ccheatRainCheatFn = nullptr;
+    FnCCheatVoid ccheatRiotCheatFn = nullptr;
+    FnCCheatVehicle ccheatVehicleCheatFn = nullptr;
 
     uint8_t* cutsceneRunning = nullptr;             // _ZN12CCutsceneMgr10ms_runningE
     uint8_t* bPlayersCanBeInSeparateCars = nullptr; // _ZN10CGameLogic27bPlayersCanBeInSeparateCarsE
@@ -513,6 +526,17 @@ struct GtaSaNativeSymbols {
         cpoolsGetVehicleFn = reinterpret_cast<FnCPoolsGetVehicle>(dlsym(libHandle, "_ZN6CPools10GetVehicleEi"));
         cworldClearCarsFromAreaFn = reinterpret_cast<FnCWorldClearCarsFromArea>(dlsym(libHandle, "_ZN6CWorld17ClearCarsFromAreaEffffff"));
         ccutsceneMgrSkipCutsceneFn = reinterpret_cast<FnCCutsceneMgrSkipCutscene>(dlsym(libHandle, "_ZN12CCutsceneMgr12SkipCutsceneEv"));
+        ccheatHealthCheatFn = reinterpret_cast<FnCCheatVoid>(dlsym(libHandle, "_ZN6CCheat11HealthCheatEv"));
+        ccheatWeaponCheat1Fn = reinterpret_cast<FnCCheatVoid>(dlsym(libHandle, "_ZN6CCheat12WeaponCheat1Ev"));
+        ccheatWeaponCheat2Fn = reinterpret_cast<FnCCheatVoid>(dlsym(libHandle, "_ZN6CCheat12WeaponCheat2Ev"));
+        ccheatWeaponCheat3Fn = reinterpret_cast<FnCCheatVoid>(dlsym(libHandle, "_ZN6CCheat12WeaponCheat3Ev"));
+        ccheatJetpackCheatFn = reinterpret_cast<FnCCheatVoid>(dlsym(libHandle, "_ZN6CCheat12JetpackCheatEv"));
+        ccheatNotWantedCheatFn = reinterpret_cast<FnCCheatVoid>(dlsym(libHandle, "_ZN6CCheat14NotWantedCheatEv"));
+        ccheatWantedCheatFn = reinterpret_cast<FnCCheatVoid>(dlsym(libHandle, "_ZN6CCheat11WantedCheatEv"));
+        ccheatSunnyCheatFn = reinterpret_cast<FnCCheatVoid>(dlsym(libHandle, "_ZN6CCheat10SunnyCheatEv"));
+        ccheatRainCheatFn = reinterpret_cast<FnCCheatVoid>(dlsym(libHandle, "_ZN6CCheat9RainCheatEv"));
+        ccheatRiotCheatFn = reinterpret_cast<FnCCheatVoid>(dlsym(libHandle, "_ZN6CCheat9RiotCheatEv"));
+        ccheatVehicleCheatFn = reinterpret_cast<FnCCheatVehicle>(dlsym(libHandle, "_ZN6CCheat12VehicleCheatEi"));
         cutsceneRunning = reinterpret_cast<uint8_t*>(dlsym(libHandle, "_ZN12CCutsceneMgr10ms_runningE"));
 
         bPlayersCanBeInSeparateCars = reinterpret_cast<uint8_t*>(dlsym(libHandle, "_ZN10CGameLogic27bPlayersCanBeInSeparateCarsE"));
@@ -1437,6 +1461,102 @@ public:
         // porque cambiar el modelo del jugador local corrompe CClothes y crashea GTA SA.
         if (config_.localSkinModelId > 0) {
             me.skinModelId = config_.localSkinModelId;
+        }
+
+        // ====================================================================
+        // EJECUCIÓN DE TRUCOS RÁPIDOS DESDE LA APP (coop_cheat_cmd.txt) EN CWorld::Process
+        // ====================================================================
+        if (pendingVehicleSpawnModel_ > 0 && gtaSymbols_.isModelLoaded(pendingVehicleSpawnModel_)) {
+            if (gtaSymbols_.ccarCtrlCreateCarForScriptFn) {
+                float rad = myHeading * 3.14159265f / 180.0f;
+                CVector spawnPos{myPos.x - std::sin(rad) * 4.5f, myPos.y + std::cos(rad) * 4.5f, myPos.z + 0.6f};
+                gtaSymbols_.ccarCtrlCreateCarForScriptFn(pendingVehicleSpawnModel_, spawnPos, 0);
+            }
+            pendingVehicleSpawnModel_ = 0;
+        }
+        if ((tickCount % 15) == 0 || !pendingRemoteCheatCmd_.empty()) {
+            std::string cheatCmd;
+            if (!pendingRemoteCheatCmd_.empty()) {
+                cheatCmd = pendingRemoteCheatCmd_;
+                pendingRemoteCheatCmd_.clear();
+            } else {
+                const char* cheatPaths[] = {
+                    "/storage/emulated/0/Android_unprotected/data/com.rockstargames.gtasa/files/coop_cheat_cmd.txt",
+                    "/sdcard/Android_unprotected/data/com.rockstargames.gtasa/files/coop_cheat_cmd.txt"
+                };
+                for (const char* cp : cheatPaths) {
+                    FILE* cf = fopen(cp, "r");
+                    if (cf) {
+                        char lineBuf[64] = {0};
+                        if (fgets(lineBuf, sizeof(lineBuf), cf)) {
+                            cheatCmd = trim(std::string(lineBuf));
+                        }
+                        fclose(cf);
+                        ::remove(cp);
+                        if (!cheatCmd.empty()) break;
+                    }
+                }
+            }
+            if (!cheatCmd.empty()) {
+                for (char& c : cheatCmd) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+                if (cheatCmd == "HESOYAM") {
+                    if (gtaSymbols_.ccheatHealthCheatFn) {
+                        gtaSymbols_.ccheatHealthCheatFn();
+                    }
+                    *reinterpret_cast<float*>(localPedAddr + 0x6ac) = 200.0f;
+                    *reinterpret_cast<float*>(localPedAddr + 0x6b0) = 200.0f;
+                    *reinterpret_cast<float*>(localPedAddr + 0x6b4) = 200.0f;
+                    if (myVeh != nullptr) {
+                        *reinterpret_cast<float*>(reinterpret_cast<uintptr_t>(myVeh) + 0x5c0) = 1000.0f;
+                    }
+                    me.health = 200;
+                    me.armor = 200;
+                } else if (cheatCmd == "LXGIWYL") {
+                    if (gtaSymbols_.ccheatWeaponCheat1Fn) gtaSymbols_.ccheatWeaponCheat1Fn();
+                } else if (cheatCmd == "KJKSZPJ") {
+                    if (gtaSymbols_.ccheatWeaponCheat2Fn) gtaSymbols_.ccheatWeaponCheat2Fn();
+                } else if (cheatCmd == "UZUMYMW") {
+                    if (gtaSymbols_.ccheatWeaponCheat3Fn) gtaSymbols_.ccheatWeaponCheat3Fn();
+                } else if (cheatCmd == "ROCKETMAN") {
+                    if (gtaSymbols_.ccheatJetpackCheatFn) gtaSymbols_.ccheatJetpackCheatFn();
+                } else if (cheatCmd == "AEZAKMI") {
+                    if (gtaSymbols_.ccheatNotWantedCheatFn) gtaSymbols_.ccheatNotWantedCheatFn();
+                    me.wantedStars = 0;
+                } else if (cheatCmd == "OSRBLHH") {
+                    if (gtaSymbols_.ccheatWantedCheatFn) gtaSymbols_.ccheatWantedCheatFn();
+                    me.wantedStars = static_cast<uint8_t>(std::min<int>(6, me.wantedStars + 2));
+                } else if (cheatCmd == "AIWPRTON" || cheatCmd == "JUMPJET" || cheatCmd == "OHDUDE" ||
+                           cheatCmd == "PDNEJOH" || cheatCmd == "FOURWHEELFUN") {
+                    int vehModel = (cheatCmd == "AIWPRTON") ? 432 :
+                                   (cheatCmd == "JUMPJET") ? 520 :
+                                   (cheatCmd == "OHDUDE") ? 425 :
+                                   (cheatCmd == "PDNEJOH") ? 494 : 471;
+                    if (gtaSymbols_.ccheatVehicleCheatFn) {
+                        gtaSymbols_.ccheatVehicleCheatFn(vehModel);
+                    } else if (gtaSymbols_.cstreamingRequestModelFn) {
+                        gtaSymbols_.cstreamingRequestModelFn(vehModel, 2);
+                        if (gtaSymbols_.cstreamingLoadAllRequestedModelsFn) {
+                            gtaSymbols_.cstreamingLoadAllRequestedModelsFn(false);
+                        }
+                        pendingVehicleSpawnModel_ = vehModel;
+                    }
+                } else if (cheatCmd == "AFZLLQLL") {
+                    if (gtaSymbols_.ccheatSunnyCheatFn) gtaSymbols_.ccheatSunnyCheatFn();
+                    if (gtaSymbols_.oldWeatherType) *gtaSymbols_.oldWeatherType = 0;
+                    if (gtaSymbols_.newWeatherType) *gtaSymbols_.newWeatherType = 0;
+                    lastWorldCheatSynced_ = cheatCmd;
+                } else if (cheatCmd == "AUIFRVQS") {
+                    if (gtaSymbols_.ccheatRainCheatFn) gtaSymbols_.ccheatRainCheatFn();
+                    if (gtaSymbols_.oldWeatherType) *gtaSymbols_.oldWeatherType = 8;
+                    if (gtaSymbols_.newWeatherType) *gtaSymbols_.newWeatherType = 8;
+                    lastWorldCheatSynced_ = cheatCmd;
+                } else if (cheatCmd == "IOJUFZN") {
+                    if (gtaSymbols_.ccheatRiotCheatFn) gtaSymbols_.ccheatRiotCheatFn();
+                    lastWorldCheatSynced_ = cheatCmd;
+                }
+                lastAppliedCheatCmd_ = cheatCmd;
+                LOGI("Applied in-app cheat on CWorld::Process thread: %s", cheatCmd.c_str());
+            }
         }
 
         // ====================================================================
@@ -3011,6 +3131,7 @@ public:
                 const auto* wc = reinterpret_cast<const WorldCheatSyncPacket*>(data);
                 if (wc->cheatCategory == CHEAT_WORLD_SHARED) {
                     lastWorldCheatSynced_ = wc->cheatCode;
+                    pendingRemoteCheatCmd_ = wc->cheatCode;
                 }
                 packetsProcessed_.fetch_add(1);
                 return true;
@@ -3556,9 +3677,10 @@ private:
         if (!logf) return;
         std::string summary = getBridgeSummary();
         fprintf(logf, "=== COOPANDREAS NATIVE BRIDGE ACTIVE IN GTA SA ===\nLocalIP: %s\n%s\n", myIp.c_str(), summary.c_str());
-        fprintf(logf, "Session: Role=%s | Slot=%d | Room=%s | HostIP=%s | ActivePeers=%zu | JoinInProgress=READY | OnMission=%d | Mission=%s\n",
+        fprintf(logf, "Session: Role=%s | Slot=%d | Room=%s | HostIP=%s | ActivePeers=%zu | JoinInProgress=READY | OnMission=%d | Mission=%s | LastCheatApplied=%s\n",
                 config_.isHost ? "HOST" : "GUEST", config_.localPlayerSlot, config_.roomCode.c_str(),
-                config_.hostIp.c_str(), activePeers_.size(), mission_.onMissionFlag, mission_.missionId);
+                config_.hostIp.c_str(), activePeers_.size(), mission_.onMissionFlag, mission_.missionId,
+                lastAppliedCheatCmd_.empty() ? "NONE" : lastAppliedCheatCmd_.c_str());
         for (int i = 0; i < kMaxCoopPlayers; ++i) {
             int32_t reqSkin = players_[i].skinModelId;
             int32_t safeSkin = resolveSafePedModelId(reqSkin);
@@ -3687,6 +3809,9 @@ private:
     uint8_t cutsceneSkipVotesMask_ = 0;
     uint16_t selfInstanceId_ = 2;
     std::string lastWorldCheatSynced_;
+    std::string lastAppliedCheatCmd_;
+    std::string pendingRemoteCheatCmd_;
+    int pendingVehicleSpawnModel_ = 0;
     bool hasCustomRespawnPos_ = false;
     CVector customRespawnPos_{2495.0f, -1687.0f, 13.5f};
 

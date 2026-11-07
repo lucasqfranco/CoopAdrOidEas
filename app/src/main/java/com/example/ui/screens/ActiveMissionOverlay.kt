@@ -7,6 +7,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -33,11 +35,16 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
@@ -470,6 +477,125 @@ fun ActiveMissionOverlay(
                         fontSize = 13.sp,
                         color = SanAndreasGold
                     )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            var showCheatsPanel by remember { mutableStateOf(false) }
+            var customCheatInput by remember { mutableStateOf("") }
+
+            OutlinedButton(
+                onClick = { showCheatsPanel = !showCheatsPanel },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(42.dp)
+                    .testTag("toggle_cheats_panel_button"),
+                shape = RoundedCornerShape(10.dp),
+                border = androidx.compose.foundation.BorderStroke(1.dp, GroveGreen)
+            ) {
+                Text(
+                    text = if (showCheatsPanel) "🎮 Ocultar Trucos Rápidos (Sin Teclado)" else "🎮 Trucos Rápidos (Sin Teclado)",
+                    fontFamily = BebasNeueFontFamily,
+                    fontSize = 14.sp,
+                    color = GroveGreen
+                )
+            }
+
+            if (showCheatsPanel) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = DarkSurfaceElevated),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Column(
+                        modifier = Modifier.padding(10.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        val cheatGroups = listOf(
+                            "Locales (CHEAT_LOCAL_ONLY)" to listOf(
+                                "HESOYAM" to "Salud/Chaleco + \$250k",
+                                "LXGIWYL" to "Armas 1",
+                                "KJKSZPJ" to "Armas 2",
+                                "UZUMYMW" to "Armas 3",
+                                "ROCKETMAN" to "Jetpack",
+                                "AEZAKMI" to "0 Estrellas",
+                                "OSRBLHH" to "+2 Estrellas"
+                            ),
+                            "Vehículos (CHEAT_VEHICLE_SPAWN)" to listOf(
+                                "AIWPRTON" to "Rhino (432)",
+                                "JUMPJET" to "Hydra (520)",
+                                "OHDUDE" to "Hunter (425)",
+                                "PDNEJOH" to "Hotring (494)",
+                                "FOURWHEELFUN" to "Quad (471)"
+                            ),
+                            "Mundo (CHEAT_WORLD_SHARED)" to listOf(
+                                "AFZLLQLL" to "Soleado",
+                                "AUIFRVQS" to "Tormenta",
+                                "IOJUFZN" to "Caos"
+                            )
+                        )
+                        cheatGroups.forEach { (groupTitle, items) ->
+                            Text(
+                                text = groupTitle,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = SanAndreasGold
+                            )
+                            @OptIn(ExperimentalLayoutApi::class)
+                            FlowRow(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                items.forEach { (code, label) ->
+                                    Box(
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .background(Color(0xFF1A281E))
+                                            .border(1.dp, GroveGreen, RoundedCornerShape(8.dp))
+                                            .clickable { viewModel.triggerCheatFromApp(code) }
+                                            .padding(horizontal = 8.dp, vertical = 5.dp)
+                                    ) {
+                                        Text(
+                                            text = "$code • $label",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = Color.White
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            OutlinedTextField(
+                                value = customCheatInput,
+                                onValueChange = { customCheatInput = it },
+                                label = { Text("Código manual (ej. HESOYAM)") },
+                                singleLine = true,
+                                modifier = Modifier.weight(1f),
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    focusedBorderColor = GroveGreen,
+                                    focusedTextColor = Color.White,
+                                    unfocusedTextColor = Color.White
+                                )
+                            )
+                            Button(
+                                onClick = {
+                                    viewModel.triggerCheatFromApp(customCheatInput)
+                                    customCheatInput = ""
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = GroveGreen, contentColor = Color.Black),
+                                shape = RoundedCornerShape(8.dp)
+                            ) {
+                                Text("APLICAR", fontFamily = BebasNeueFontFamily, fontSize = 14.sp)
+                            }
+                        }
+                    }
                 }
             }
 

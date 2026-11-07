@@ -428,6 +428,9 @@ class ModFileManager(private val context: Context) {
                 try { File(modsDir, dupName).let { if (it.exists()) it.delete() } } catch (_: Exception) {}
             }
             try { File(baseDir, "aml_crashlog.txt").let { if (it.exists()) it.delete() } } catch (_: Exception) {}
+            // Eliminar preventivamente GTASAsf10.b para evitar crash al tocar "Reanudar" si contiene CTaskComplexLeaveCar o peds remotos
+            try { File(filesDir, "GTASAsf10.b").let { if (it.exists()) it.delete() } } catch (_: Exception) {}
+            try { File("/storage/emulated/0/Android/data/com.rockstargames.gtasa/files/GTASAsf10.b").let { if (it.exists()) it.delete() } } catch (_: Exception) {}
             val existingCleo = File(modsDir, "libCLEOMod.so")
             if (existingCleo.exists() && existingCleo.length() < 700_000L) {
                 // Borrar el libCLEOMod.so de 579 KB (32 bits v2.00) que crashea GTASA 2.10
@@ -1247,10 +1250,30 @@ class ModFileManager(private val context: Context) {
         return false
     }
 
+    fun writeCheatCommandFile(cheatCode: String): Boolean {
+        val clean = cheatCode.trim().uppercase()
+        if (clean.isEmpty()) return false
+        var written = false
+        val targets = listOf(
+            File("/storage/emulated/0/Android_unprotected/data/com.rockstargames.gtasa/files/coop_cheat_cmd.txt"),
+            File("/sdcard/Android_unprotected/data/com.rockstargames.gtasa/files/coop_cheat_cmd.txt"),
+            File(context.getExternalFilesDir(null), "CoopAndreas_Mod/coop_cheat_cmd.txt")
+        )
+        targets.forEach { file ->
+            try {
+                file.parentFile?.mkdirs()
+                file.writeText("$clean\n")
+                written = true
+            } catch (_: Exception) {}
+        }
+        return written
+    }
+
     private fun writeSaveFile(target: File) {
         try {
             val gtaFilesDir = File("/storage/emulated/0/Android_unprotected/data/com.rockstargames.gtasa/files")
-            val realSave = listOf("GTASAsf10.b", "GTASAsf1.b", "GTASAsf2.b", "GTASAsf3.b", "GTASAsf9.b")
+            try { File(gtaFilesDir, "GTASAsf10.b").let { if (it.exists()) it.delete() } } catch (_: Exception) {}
+            val realSave = listOf("GTASAsf1.b", "GTASAsf2.b", "GTASAsf3.b", "GTASAsf9.b")
                 .map { File(gtaFilesDir, it) }
                 .firstOrNull { it.exists() && it.length() > 100_000L }
             if (realSave != null) {
