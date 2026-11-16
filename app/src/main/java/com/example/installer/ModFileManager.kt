@@ -473,8 +473,8 @@ class ModFileManager(private val context: Context) {
             sampLowerDir.mkdirs()
             modsDir.mkdirs()
 
-            // Limpiar duplicados .so 32-bit en mods/ y crashlog previo para evitar cierre en GTASA 2.10 AML 1.2.4
-            listOf("cleomod.so", "net.rusjj.cleomod.so", "libSAUtils.so").forEach { dupName ->
+            // Limpiar duplicados .so en mods/ y crashlog previo para evitar doble carga en GTASA 2.10 AML 1.2.4
+            listOf("cleomod.so", "net.rusjj.cleomod.so", "libSAUtils.so", "libCoopAndreasBridge_arm64-v8a.so").forEach { dupName ->
                 try { File(modsDir, dupName).let { if (it.exists()) it.delete() } } catch (_: Exception) {}
             }
             try { File(baseDir, "aml_crashlog.txt").let { if (it.exists()) it.delete() } } catch (_: Exception) {}
@@ -493,6 +493,10 @@ class ModFileManager(private val context: Context) {
             val modDir = File(context.getExternalFilesDir(null), "CoopAndreas_Mod")
             if (!modDir.exists() || modDir.listFiles().isNullOrEmpty()) {
                 installModFiles()
+            } else {
+                // Asegurar que CoopAndreas_Mod siempre tenga el libCoopAndreasBridge.so más reciente de este APK
+                extractOrWriteNativeBridgeSo(File(modDir, "libCoopAndreasBridge.so"))
+                extractOrWriteNativeBridgeSo(File(File(modDir, "mods"), "libCoopAndreasBridge.so"))
             }
 
             // Extraer libCoopAndreasBridge.so directamente desde context.applicationInfo.nativeLibraryDir hacia mods/
@@ -1248,8 +1252,8 @@ class ModFileManager(private val context: Context) {
 
     private fun copyCleoPluginToModsDir(modsDir: File) {
         modsDir.mkdirs()
-        // Eliminar duplicados 32-bit que causan colisión en AML 1.2.4 (aml_crashlog.txt)
-        listOf("cleomod.so", "net.rusjj.cleomod.so", "libSAUtils.so").forEach { dup ->
+        // Eliminar duplicados que causan colisión o doble instancia en AML 1.2.4
+        listOf("cleomod.so", "net.rusjj.cleomod.so", "libSAUtils.so", "libCoopAndreasBridge_arm64-v8a.so").forEach { dup ->
             try {
                 val f = File(modsDir, dup)
                 if (f.exists()) f.delete()
