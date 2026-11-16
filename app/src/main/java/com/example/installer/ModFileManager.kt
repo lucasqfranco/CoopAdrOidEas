@@ -1514,6 +1514,70 @@ class ModFileManager(private val context: Context) {
         return skin.modelId
     }
 
+    suspend fun downloadAndInstallLatestApkUpdate(
+        apkUrl: String = "https://github.com/lucasqfranco/CoopAdrOidEas/releases/latest/download/CoopAndreas.apk"
+    ): Result<String> = withContext(Dispatchers.IO) {
+        try {
+            val updateDir = File(context.getExternalFilesDir(null), "ota_update").apply { mkdirs() }
+            val targetApk = File(updateDir, "CoopAndreas-latest.apk")
+            val conn = (java.net.URL(apkUrl).openConnection() as java.net.HttpURLConnection).apply {
+                instanceFollowRedirects = true
+                connectTimeout = 15000
+                readTimeout = 30000
+                setRequestProperty("User-Agent", "CoopAndreas-OTA-Updater/3.4")
+            }
+            conn.connect()
+            if (conn.responseCode !in 200..299) {
+                return@withContext Result.failure(IllegalStateException("HTTP ${conn.responseCode} al descargar actualización OTA"))
+            }
+            conn.inputStream.use { input ->
+                FileOutputStream(targetApk).use { out ->
+                    input.copyTo(out)
+                }
+            }
+
+            // Extraer automáticamente lib/arm64-v8a/libCoopAndreasBridge.so del nuevo APK directo a mods/ de GTA SA
+            try {
+                java.util.zip.ZipFile(targetApk).use { zf ->
+                    val bridgeEntry = zf.getEntry("lib/arm64-v8a/libCoopAndreasBridge.so")
+                    if (bridgeEntry != null) {
+                        val modsDir = File("/storage/emulated/0/Android_unprotected/data/com.rockstargames.gtasa/mods")
+                        if (modsDir.exists() || modsDir.mkdirs()) {
+                            val dstSo = File(modsDir, "libCoopAndreasBridge.so")
+                            zf.getInputStream(bridgeEntry).use { zIn ->
+                                FileOutputStream(dstSo).use { zOut -> zIn.copyTo(zOut) }
+                            }
+                        }
+                    }
+                }
+            } catch (_: Exception) {}
+
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O &&
+                !context.packageManager.canRequestPackageInstalls()
+            ) {
+                val permIntent = Intent(
+                    android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                    Uri.parse("package:${context.packageName}")
+                ).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
+                context.startActivity(permIntent)
+            }
+
+            val apkUri = FileProvider.getUriForFile(
+                context,
+                "${context.packageName}.fileprovider",
+                targetApk
+            )
+            val installIntent = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(apkUri, "application/vnd.android.package-archive")
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(installIntent)
+            Result.success("APK OTA descargado (${targetApk.length() / 1024} KB) + libCoopAndreasBridge.so actualizado en GTA SA.")
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
     fun getDeviceIpAddress(): String {
         try {
             val interfaces = java.util.Collections.list(NetworkInterface.getNetworkInterfaces())

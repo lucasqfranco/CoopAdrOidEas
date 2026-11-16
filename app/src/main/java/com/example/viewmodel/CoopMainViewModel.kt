@@ -679,6 +679,18 @@ class CoopMainViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
+    fun triggerOtaSelfUpdate() {
+        showNotification("Descargando última actualización OTA de CoopAndreas...")
+        viewModelScope.launch(Dispatchers.IO) {
+            val res = modFileManager.downloadAndInstallLatestApkUpdate()
+            res.onSuccess { msg ->
+                showNotification(msg)
+            }.onFailure { err ->
+                showNotification("Error OTA: ${err.message}")
+            }
+        }
+    }
+
     fun showNotification(msg: String) {
         _notificationMessage.value = msg
     }

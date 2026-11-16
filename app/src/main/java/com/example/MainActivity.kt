@@ -208,6 +208,17 @@ class MainActivity : ComponentActivity() {
                                 }
 
                                 IconButton(
+                                    onClick = { viewModel.triggerOtaSelfUpdate() },
+                                    modifier = Modifier.testTag("ota_update_action")
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Download,
+                                        contentDescription = "Auto-Actualizar APK (OTA)",
+                                        tint = SanAndreasGold
+                                    )
+                                }
+
+                                IconButton(
                                     onClick = { viewModel.toggleOverlayMode() },
                                     modifier = Modifier.testTag("toggle_overlay_action")
                                 ) {
