@@ -344,6 +344,7 @@ class ModFileManager(private val context: Context) {
         var parsedCustomSkinId = _status.value.customSkinId
         var parsedSelectedSkin = _status.value.mySelectedSkin
         var parsedPartnerSkin = _status.value.partnerSkin
+        var parsedMarkerColor = _status.value.myMarkerColor
 
         try {
             val sampIniFile = detectedUnprotectedBase?.let { File(it, "files/SAMP/settings.ini") }
@@ -376,6 +377,14 @@ class ModFileManager(private val context: Context) {
                                     }
                                 }
                             }
+                            "marker_color" -> {
+                                val cid = v.toIntOrNull()
+                                if (cid != null) {
+                                    PlayerMarkerColor.entries.firstOrNull { it.radarColorId == cid }?.let {
+                                        parsedMarkerColor = it
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -392,6 +401,7 @@ class ModFileManager(private val context: Context) {
             customSkinId = parsedCustomSkinId,
             mySelectedSkin = parsedSelectedSkin,
             partnerSkin = parsedPartnerSkin,
+            myMarkerColor = parsedMarkerColor,
             installedFiles = if (hasGeneratedAll) generatedFiles else emptyList(),
             isAndroidUnprotectedEdition = isUnprotectedEdition,
             androidUnprotectedPath = detectedUnprotectedBase?.absolutePath,

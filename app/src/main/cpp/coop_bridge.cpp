@@ -104,6 +104,18 @@ struct CVector {
 };
 static_assert(sizeof(CVector) == 12, "CVector must be 12 bytes");
 
+struct CVector2D {
+    float x = 0.0f;
+    float y = 0.0f;
+};
+
+struct GtaCRGBA {
+    uint8_t r = 255;
+    uint8_t g = 255;
+    uint8_t b = 255;
+    uint8_t a = 255;
+};
+
 #pragma pack(push, 1)
 // Cabecera común de paquete binario UDP (puerto 6767)
 struct BinaryPacketHeader {
@@ -351,11 +363,27 @@ struct GtaSaNativeSymbols {
     using FnCRadarChangeBlipColour = void (*)(int blipHandle, uint32_t colour);
     using FnCRadarSetBlipFriendly = void (*)(int blipHandle, uint8_t friendly);
     using FnCRadarChangeBlipScale = void (*)(int blipHandle, int scale);
+    using FnCRadarChangeBlipDisplay = void (*)(int blipHandle, int blipDisplay);
     using FnCRadarClearBlip = void (*)(int blipHandle);
+    using FnCRadarDrawBlips = void (*)(float circleSize);
+    using FnCRadarTransformRealWorldPointToRadarSpace = void (*)(CVector2D* radarPt, const CVector2D* worldPt);
+    using FnCRadarLimitRadarPoint = float (*)(CVector2D* radarPt);
+    using FnCRadarTransformRadarPointToScreenSpace = void (*)(CVector2D* screenPt, const CVector2D* radarPt);
+    using FnCRadarDrawRotatingRadarSprite = void (*)(void* sprite2d, float x, float y, float angle, float scale, const GtaCRGBA* color);
+    using FnCRadarGetRadarTraceColour = uint32_t (*)(uint32_t colourId, uint8_t bright, uint8_t friendly);
     FnCRadarChangeBlipColour cradarChangeBlipColourFn = nullptr;
     FnCRadarSetBlipFriendly cradarSetBlipFriendlyFn = nullptr;
     FnCRadarChangeBlipScale cradarChangeBlipScaleFn = nullptr;
+    FnCRadarChangeBlipDisplay cradarChangeBlipDisplayFn = nullptr;
     FnCRadarClearBlip cradarClearBlipFn = nullptr;
+    FnCRadarDrawBlips cradarDrawBlipsFn = nullptr;
+    FnCRadarTransformRealWorldPointToRadarSpace cradarTransformRealWorldPointToRadarSpaceFn = nullptr;
+    FnCRadarLimitRadarPoint cradarLimitRadarPointFn = nullptr;
+    FnCRadarTransformRadarPointToScreenSpace cradarTransformRadarPointToScreenSpaceFn = nullptr;
+    FnCRadarDrawRotatingRadarSprite cradarDrawRotatingRadarSpriteFn = nullptr;
+    FnCRadarGetRadarTraceColour cradarGetRadarTraceColourFn = nullptr;
+    void* cradarBlipSprites = nullptr;
+    void* frontEndMenuManager = nullptr;
     FnC3dMarkersPlaceMarkerCone c3dMarkersPlaceMarkerConeFn = nullptr;
     using FnCTaskOperatorNew = void* (*)(size_t size);
     using FnCTaskSimpleStandStillCtor = void* (*)(void* self, int nTime, bool bLooped, bool bUseAnimIdle, float fBlendData);
@@ -524,7 +552,16 @@ struct GtaSaNativeSymbols {
         cradarChangeBlipColourFn = reinterpret_cast<FnCRadarChangeBlipColour>(dlsym(libHandle, "_ZN6CRadar16ChangeBlipColourEij"));
         cradarSetBlipFriendlyFn = reinterpret_cast<FnCRadarSetBlipFriendly>(dlsym(libHandle, "_ZN6CRadar15SetBlipFriendlyEih"));
         cradarChangeBlipScaleFn = reinterpret_cast<FnCRadarChangeBlipScale>(dlsym(libHandle, "_ZN6CRadar15ChangeBlipScaleEii"));
+        cradarChangeBlipDisplayFn = reinterpret_cast<FnCRadarChangeBlipDisplay>(dlsym(libHandle, "_ZN6CRadar17ChangeBlipDisplayEi12eBlipDisplay"));
         cradarClearBlipFn = reinterpret_cast<FnCRadarClearBlip>(dlsym(libHandle, "_ZN6CRadar9ClearBlipEi"));
+        cradarDrawBlipsFn = reinterpret_cast<FnCRadarDrawBlips>(dlsym(libHandle, "_ZN6CRadar9DrawBlipsEf"));
+        cradarTransformRealWorldPointToRadarSpaceFn = reinterpret_cast<FnCRadarTransformRealWorldPointToRadarSpace>(dlsym(libHandle, "_ZN6CRadar35TransformRealWorldPointToRadarSpaceER9CVector2DRKS0_"));
+        cradarLimitRadarPointFn = reinterpret_cast<FnCRadarLimitRadarPoint>(dlsym(libHandle, "_ZN6CRadar15LimitRadarPointER9CVector2D"));
+        cradarTransformRadarPointToScreenSpaceFn = reinterpret_cast<FnCRadarTransformRadarPointToScreenSpace>(dlsym(libHandle, "_ZN6CRadar32TransformRadarPointToScreenSpaceER9CVector2DRKS0_"));
+        cradarDrawRotatingRadarSpriteFn = reinterpret_cast<FnCRadarDrawRotatingRadarSprite>(dlsym(libHandle, "_ZN6CRadar23DrawRotatingRadarSpriteEP9CSprite2dffff5CRGBA"));
+        cradarGetRadarTraceColourFn = reinterpret_cast<FnCRadarGetRadarTraceColour>(dlsym(libHandle, "_ZN6CRadar19GetRadarTraceColourEjhh"));
+        cradarBlipSprites = dlsym(libHandle, "_ZN6CRadar16RadarBlipSpritesE");
+        frontEndMenuManager = dlsym(libHandle, "FrontEndMenuManager");
         c3dMarkersPlaceMarkerConeFn = reinterpret_cast<FnC3dMarkersPlaceMarkerCone>(dlsym(libHandle, "_ZN10C3dMarkers15PlaceMarkerConeEyR7CVectorfhhhhtfsh"));
         ctaskOperatorNewFn = reinterpret_cast<FnCTaskOperatorNew>(dlsym(libHandle, "_ZN5CTasknwEm"));
         ctaskSimpleStandStillCtorFn = reinterpret_cast<FnCTaskSimpleStandStillCtor>(dlsym(libHandle, "_ZN21CTaskSimpleStandStillC1Eibbf"));
@@ -728,10 +765,12 @@ static FnCWorldProcess g_origCWorldProcess = nullptr;
 static GtaSaNativeSymbols::FnCClothesRebuildPlayer g_origCClothesRebuildPlayer = nullptr;
 static GtaSaNativeSymbols::FnCClothesRebuildPlayerIfNeeded g_origCClothesRebuildPlayerIfNeeded = nullptr;
 static GtaSaNativeSymbols::FnCClothesRebuildCutscenePlayer g_origCClothesRebuildCutscenePlayer = nullptr;
+static GtaSaNativeSymbols::FnCRadarDrawBlips g_origCRadarDrawBlips = nullptr;
 static void Hooked_CWorld_Process();
 static void Hooked_CClothes_RebuildPlayer(void* playerPed, bool bIgnoreFatAndMuscle);
 static void Hooked_CClothes_RebuildPlayerIfNeeded(void* playerPed);
 static void Hooked_CClothes_RebuildCutscenePlayer(void* playerPed, int modelId);
+static void Hooked_CRadar_DrawBlips(float circleSize);
 
 class CoopEngineBridge {
 public:
@@ -785,6 +824,7 @@ public:
         g_origCClothesRebuildPlayer = gtaSymbols_.cclothesRebuildPlayerFn;
         g_origCClothesRebuildPlayerIfNeeded = gtaSymbols_.cclothesRebuildPlayerIfNeededFn;
         g_origCClothesRebuildCutscenePlayer = gtaSymbols_.cclothesRebuildCutscenePlayerFn;
+        g_origCRadarDrawBlips = gtaSymbols_.cradarDrawBlipsFn;
 
         // 0. En libGTASA.so v2.10 arm64, CTaskSimpleStandStill::ProcessPed (0x5ef6ec) llama a
         // CPed::SetMoveState(ped, 1) en 0x5ef7f0 en cada frame subsiguiente, sobrescribiendo el
@@ -822,11 +862,12 @@ public:
         hookGotOffset(0x847de0, reinterpret_cast<void*>(gtaSymbols_.cclothesRebuildPlayerFn), reinterpret_cast<void*>(&Hooked_CClothes_RebuildPlayer));
         hookGotOffset(0x847398, reinterpret_cast<void*>(gtaSymbols_.cclothesRebuildPlayerIfNeededFn), reinterpret_cast<void*>(&Hooked_CClothes_RebuildPlayerIfNeeded));
         hookGotOffset(0x841800, reinterpret_cast<void*>(gtaSymbols_.cclothesRebuildCutscenePlayerFn), reinterpret_cast<void*>(&Hooked_CClothes_RebuildCutscenePlayer));
+        hookGotOffset(0x83ded0, reinterpret_cast<void*>(gtaSymbols_.cradarDrawBlipsFn), reinterpret_cast<void*>(&Hooked_CRadar_DrawBlips));
 
         // 1. Check exact GOT offset 0x843fb0 in libGTASA.so v2.10 arm64-v8a first
         if (hookGotOffset(0x843fb0, targetFn, reinterpret_cast<void*>(&Hooked_CWorld_Process))) {
             gotHookInstalled_.store(true);
-            LOGI("Installed GOT Hooks on _ZN6CWorld7ProcessEv and CClothes::RebuildPlayer at base=0x%lx",
+            LOGI("Installed GOT Hooks on _ZN6CWorld7ProcessEv, CClothes::RebuildPlayer, and CRadar::DrawBlips at base=0x%lx",
                  static_cast<unsigned long>(gtaSymbols_.libBase));
             return true;
         }
@@ -858,6 +899,11 @@ public:
                     uintptr_t pageStart = p & ~static_cast<uintptr_t>(0xFFF);
                     if (::mprotect(reinterpret_cast<void*>(pageStart), 4096, PROT_READ | PROT_WRITE) == 0) {
                         *slot = reinterpret_cast<void*>(&Hooked_CClothes_RebuildCutscenePlayer);
+                    }
+                } else if (gtaSymbols_.cradarDrawBlipsFn && *slot == reinterpret_cast<void*>(gtaSymbols_.cradarDrawBlipsFn)) {
+                    uintptr_t pageStart = p & ~static_cast<uintptr_t>(0xFFF);
+                    if (::mprotect(reinterpret_cast<void*>(pageStart), 4096, PROT_READ | PROT_WRITE) == 0) {
+                        *slot = reinterpret_cast<void*>(&Hooked_CRadar_DrawBlips);
                     }
                 } else if (*slot == targetFn) {
                     uintptr_t pageStart = p & ~static_cast<uintptr_t>(0xFFF);
@@ -2775,14 +2821,21 @@ public:
                     remotePedSpawnedModel_[i] = static_cast<int>(spawnModel);
 
                     if (handle > 0 && gtaSymbols_.cradarSetEntityBlipFn) {
-                        // En GTA SA arm64 v2.10: cuando friendly = 0, tanto CRadar::DrawEntityBlip (minimapa)
-                        // como CRadar::Draw3dMarkers (cono 3D sobre la cabeza) usan exactamente desiredSlotColor (0..6)
+                        // En GTA SA arm64 v2.10: cuando friendly = 0, CRadar::Draw3dMarkers (cono 3D sobre la cabeza)
+                        // usa desiredSlotColor (0..6). Usamos BLIP_DISPLAY_MARKER_ONLY (1) cuando DrawRotatingRadarSprite
+                        // está activo para que en el minimapa se dibuje únicamente la "gota" (RADAR_SPRITE_CENTRE) coloreada.
                         uint32_t slotColor = desiredSlotColor;
                         uint8_t isFriendly = 0u;
+                        int blipDisplayMode = (gtaSymbols_.cradarDrawRotatingRadarSpriteFn && gtaSymbols_.cradarBlipSprites)
+                            ? 1 /*BLIP_DISPLAY_MARKER_ONLY*/
+                            : 3 /*BLIP_DISPLAY_BOTH*/;
                         remoteBlipHandle_[i] = gtaSymbols_.cradarSetEntityBlipFn(
-                            2 /*BLIP_CHAR*/, handle, slotColor, 3 /*BLIP_DISPLAY_BOTH*/, nullptr
+                            2 /*BLIP_CHAR*/, handle, slotColor, blipDisplayMode, nullptr
                         );
                         if (remoteBlipHandle_[i] > 0) {
+                            if (gtaSymbols_.cradarChangeBlipDisplayFn) {
+                                gtaSymbols_.cradarChangeBlipDisplayFn(remoteBlipHandle_[i], blipDisplayMode);
+                            }
                             if (gtaSymbols_.cradarChangeBlipColourFn) {
                                 gtaSymbols_.cradarChangeBlipColourFn(remoteBlipHandle_[i], slotColor);
                             }
@@ -3957,6 +4010,92 @@ public:
         initialized_.store(false);
     }
 
+    void onRadarDrawBlips(float /*circleSize*/) {
+#if defined(__unix__) || defined(__ANDROID__) || defined(__linux__)
+        if (!gtaSymbols_.cradarDrawRotatingRadarSpriteFn ||
+            !gtaSymbols_.cradarBlipSprites ||
+            !gtaSymbols_.cradarTransformRealWorldPointToRadarSpaceFn ||
+            !gtaSymbols_.cradarLimitRadarPointFn ||
+            !gtaSymbols_.cradarTransformRadarPointToScreenSpaceFn) {
+            return;
+        }
+
+        int localIdx = std::clamp(config_.localPlayerSlot, 1, kMaxCoopPlayers) - 1;
+        void* centreSprite = reinterpret_cast<uint8_t*>(gtaSymbols_.cradarBlipSprites) + 0x10; // &CRadar::RadarBlipSprites[2] (RADAR_SPRITE_CENTRE "gota")
+
+        bool isPauseMap = false;
+        if (gtaSymbols_.frontEndMenuManager != nullptr) {
+            isPauseMap = (*reinterpret_cast<uint8_t*>(reinterpret_cast<uintptr_t>(gtaSymbols_.frontEndMenuManager) + 0x8c) != 0);
+        }
+        float camOrient = (!isPauseMap && gtaSymbols_.libBase != 0)
+            ? *reinterpret_cast<float*>(gtaSymbols_.libBase + 0xc24830)
+            : 0.0f;
+
+        for (int i = 0; i < kMaxCoopPlayers; ++i) {
+            if (i == localIdx) continue;
+            const PlayerState3D& rem = players_[i];
+            if (!rem.isActive) continue;
+
+            float remX = rem.x;
+            float remY = rem.y;
+            float remHeadingRad = rem.heading * (3.1415926535f / 180.0f);
+
+            void* ped = remotePedPtr_[i];
+            if (ped != nullptr) {
+                uintptr_t pedAddr = reinterpret_cast<uintptr_t>(ped);
+                uint8_t pedFlags = *reinterpret_cast<uint8_t*>(pedAddr + 0x585);
+                bool inVeh = ((pedFlags & 1u) != 0);
+                void* veh = inVeh ? *reinterpret_cast<void**>(pedAddr + 0x708) : nullptr;
+                uintptr_t entityAddr = veh ? reinterpret_cast<uintptr_t>(veh) : pedAddr;
+                uintptr_t mat = *reinterpret_cast<uintptr_t*>(entityAddr + 0x18);
+                if (mat != 0) {
+                    remX = *reinterpret_cast<float*>(mat + 0x30);
+                    remY = *reinterpret_cast<float*>(mat + 0x34);
+                    float upX = *reinterpret_cast<float*>(mat + 0x10);
+                    float upY = *reinterpret_cast<float*>(mat + 0x14);
+                    if (std::fabs(upX) > 1e-4f || std::fabs(upY) > 1e-4f) {
+                        remHeadingRad = std::atan2(-upX, upY);
+                    }
+                }
+            }
+
+            CVector2D worldPt{remX, remY};
+            CVector2D radarPt{0.0f, 0.0f};
+            CVector2D screenPt{0.0f, 0.0f};
+            gtaSymbols_.cradarTransformRealWorldPointToRadarSpaceFn(&radarPt, &worldPt);
+            gtaSymbols_.cradarLimitRadarPointFn(&radarPt);
+            gtaSymbols_.cradarTransformRadarPointToScreenSpaceFn(&screenPt, &radarPt);
+
+            uint32_t desiredSlotColor = (rem.markerColor <= 6)
+                ? static_cast<uint32_t>(rem.markerColor)
+                : ((i == 0) ? 1u : 0u);
+
+            GtaCRGBA rgba{34, 197, 94, 255};
+            if (gtaSymbols_.cradarGetRadarTraceColourFn) {
+                uint32_t traceCol = gtaSymbols_.cradarGetRadarTraceColourFn(desiredSlotColor, 1u, 0u);
+                rgba.r = static_cast<uint8_t>((traceCol >> 24) & 0xFFu);
+                rgba.g = static_cast<uint8_t>((traceCol >> 16) & 0xFFu);
+                rgba.b = static_cast<uint8_t>((traceCol >> 8) & 0xFFu);
+                rgba.a = 255u;
+            } else {
+                switch (desiredSlotColor) {
+                    case 0: rgba = {239, 68, 68, 255}; break;   // Rojo
+                    case 1: rgba = {34, 197, 94, 255}; break;   // Verde
+                    case 2: rgba = {56, 189, 248, 255}; break;  // Azul
+                    case 3: rgba = {248, 250, 252, 255}; break; // Blanco
+                    case 4: rgba = {234, 179, 8, 255}; break;   // Amarillo
+                    case 5: rgba = {168, 85, 247, 255}; break;  // Morado
+                    case 6: rgba = {6, 182, 212, 255}; break;   // Celeste
+                    default: break;
+                }
+            }
+
+            float angle = remHeadingRad - (camOrient + 3.1415926535f);
+            gtaSymbols_.cradarDrawRotatingRadarSpriteFn(centreSprite, screenPt.x, screenPt.y, angle, 1.0f, &rgba);
+        }
+#endif
+    }
+
 private:
     CoopEngineBridge() {
         selfInstanceId_ = static_cast<uint16_t>(
@@ -4346,6 +4485,13 @@ static void Hooked_CClothes_RebuildCutscenePlayer(void* playerPed, int modelId) 
     if (g_origCClothesRebuildCutscenePlayer) {
         g_origCClothesRebuildCutscenePlayer(playerPed, modelId);
     }
+}
+
+static void Hooked_CRadar_DrawBlips(float circleSize) {
+    if (g_origCRadarDrawBlips) {
+        g_origCRadarDrawBlips(circleSize);
+    }
+    CoopEngineBridge::instance().onRadarDrawBlips(circleSize);
 }
 
 } // namespace coopandreas
