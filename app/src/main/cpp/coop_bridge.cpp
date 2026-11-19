@@ -482,6 +482,7 @@ struct GtaSaNativeSymbols {
     using FnCTaskManagerSetTaskSecondary = void (*)(void* self, void* pTask, int nTaskIndex);
     using FnCAutomobileSetupDamageAfterLoad = void (*)(void* selfAuto);
     using FnCRunningScriptLocateCharCommand = void (*)(void* selfScript, int commandId);
+    using FnCPlayerPedCanPlayerStartMission = bool (*)(void* selfPlayerPed);
 
     FnCStreamingRequestSpecialChar cstreamingRequestSpecialCharFn = nullptr;
     FnCStreamingHasSpecialCharLoaded cstreamingHasSpecialCharLoadedFn = nullptr;
@@ -501,6 +502,7 @@ struct GtaSaNativeSymbols {
     FnCTaskManagerSetTaskSecondary ctaskManagerSetTaskSecondaryFn = nullptr;
     FnCAutomobileSetupDamageAfterLoad cautomobileSetupDamageAfterLoadFn = nullptr;
     FnCRunningScriptLocateCharCommand crunningScriptLocateCharCommandFn = nullptr;
+    FnCPlayerPedCanPlayerStartMission cplayerPedCanPlayerStartMissionFn = nullptr;
     int32_t* scriptParams = nullptr;                // ScriptParams
     void* canimManagerAssocGroups = nullptr;        // _ZN12CAnimManager19ms_aAnimAssocGroupsE
     void* canimManagerAnimBlocks = nullptr;         // _ZN12CAnimManager14ms_aAnimBlocksE
@@ -639,6 +641,7 @@ struct GtaSaNativeSymbols {
         ctaskManagerSetTaskSecondaryFn = reinterpret_cast<FnCTaskManagerSetTaskSecondary>(dlsym(libHandle, "_ZN12CTaskManager16SetTaskSecondaryEP5CTaski"));
         cautomobileSetupDamageAfterLoadFn = reinterpret_cast<FnCAutomobileSetupDamageAfterLoad>(dlsym(libHandle, "_ZN11CAutomobile20SetupDamageAfterLoadEv"));
         crunningScriptLocateCharCommandFn = reinterpret_cast<FnCRunningScriptLocateCharCommand>(dlsym(libHandle, "_ZN14CRunningScript17LocateCharCommandEi"));
+        cplayerPedCanPlayerStartMissionFn = reinterpret_cast<FnCPlayerPedCanPlayerStartMission>(dlsym(libHandle, "_ZN10CPlayerPed21CanPlayerStartMissionEv"));
         scriptParams = reinterpret_cast<int32_t*>(dlsym(libHandle, "ScriptParams"));
         canimManagerAssocGroups = dlsym(libHandle, "_ZN12CAnimManager19ms_aAnimAssocGroupsE");
         canimManagerAnimBlocks = dlsym(libHandle, "_ZN12CAnimManager14ms_aAnimBlocksE");
@@ -819,12 +822,14 @@ static GtaSaNativeSymbols::FnCClothesRebuildPlayerIfNeeded g_origCClothesRebuild
 static GtaSaNativeSymbols::FnCClothesRebuildCutscenePlayer g_origCClothesRebuildCutscenePlayer = nullptr;
 static GtaSaNativeSymbols::FnCRadarDrawBlips g_origCRadarDrawBlips = nullptr;
 static GtaSaNativeSymbols::FnCRunningScriptLocateCharCommand g_origCRunningScriptLocateCharCommand = nullptr;
+static GtaSaNativeSymbols::FnCPlayerPedCanPlayerStartMission g_origCPlayerPedCanPlayerStartMission = nullptr;
 static void Hooked_CWorld_Process();
 static void Hooked_CClothes_RebuildPlayer(void* playerPed, bool bIgnoreFatAndMuscle);
 static void Hooked_CClothes_RebuildPlayerIfNeeded(void* playerPed);
 static void Hooked_CClothes_RebuildCutscenePlayer(void* playerPed, int modelId);
 static void Hooked_CRadar_DrawBlips(float circleSize);
 static void Hooked_CRunningScript_LocateCharCommand(void* selfScript, int commandId);
+static bool Hooked_CPlayerPed_CanPlayerStartMission(void* selfPlayerPed);
 
 class CoopEngineBridge {
 public:
@@ -880,6 +885,7 @@ public:
         g_origCClothesRebuildCutscenePlayer = gtaSymbols_.cclothesRebuildCutscenePlayerFn;
         g_origCRadarDrawBlips = gtaSymbols_.cradarDrawBlipsFn;
         g_origCRunningScriptLocateCharCommand = gtaSymbols_.crunningScriptLocateCharCommandFn;
+        g_origCPlayerPedCanPlayerStartMission = gtaSymbols_.cplayerPedCanPlayerStartMissionFn;
 
         // 0. En libGTASA.so v2.10 arm64, CTaskSimpleStandStill::ProcessPed (0x5ef6ec) llama a
         // CPed::SetMoveState(ped, 1) en 0x5ef7f0 en cada frame subsiguiente, sobrescribiendo el
@@ -919,6 +925,7 @@ public:
         hookGotOffset(0x841800, reinterpret_cast<void*>(gtaSymbols_.cclothesRebuildCutscenePlayerFn), reinterpret_cast<void*>(&Hooked_CClothes_RebuildCutscenePlayer));
         hookGotOffset(0x83ded0, reinterpret_cast<void*>(gtaSymbols_.cradarDrawBlipsFn), reinterpret_cast<void*>(&Hooked_CRadar_DrawBlips));
         hookGotOffset(0x849880, reinterpret_cast<void*>(gtaSymbols_.crunningScriptLocateCharCommandFn), reinterpret_cast<void*>(&Hooked_CRunningScript_LocateCharCommand));
+        hookGotOffset(0x848630, reinterpret_cast<void*>(gtaSymbols_.cplayerPedCanPlayerStartMissionFn), reinterpret_cast<void*>(&Hooked_CPlayerPed_CanPlayerStartMission));
 
         // 1. Check exact GOT offset 0x843fb0 in libGTASA.so v2.10 arm64-v8a first
         if (hookGotOffset(0x843fb0, targetFn, reinterpret_cast<void*>(&Hooked_CWorld_Process))) {
@@ -965,6 +972,11 @@ public:
                     uintptr_t pageStart = p & ~static_cast<uintptr_t>(0xFFF);
                     if (::mprotect(reinterpret_cast<void*>(pageStart), 4096, PROT_READ | PROT_WRITE) == 0) {
                         *slot = reinterpret_cast<void*>(&Hooked_CRunningScript_LocateCharCommand);
+                    }
+                } else if (gtaSymbols_.cplayerPedCanPlayerStartMissionFn && *slot == reinterpret_cast<void*>(gtaSymbols_.cplayerPedCanPlayerStartMissionFn)) {
+                    uintptr_t pageStart = p & ~static_cast<uintptr_t>(0xFFF);
+                    if (::mprotect(reinterpret_cast<void*>(pageStart), 4096, PROT_READ | PROT_WRITE) == 0) {
+                        *slot = reinterpret_cast<void*>(&Hooked_CPlayerPed_CanPlayerStartMission);
                     }
                 } else if (*slot == targetFn) {
                     uintptr_t pageStart = p & ~static_cast<uintptr_t>(0xFFF);
@@ -4404,6 +4416,34 @@ public:
 #endif
     }
 
+    bool canStartMissionTogether() {
+#if defined(__unix__) || defined(__ANDROID__) || defined(__linux__)
+        uint64_t nowMs = currentTimeMillis();
+        int localIdx = std::clamp(config_.localPlayerSlot, 1, kMaxCoopPlayers) - 1;
+        const PlayerState3D& me = players_[localIdx];
+        if (!me.hasRealGtaCoords) return true;
+
+        bool hasAnyActivePartner = false;
+        for (int i = 0; i < kMaxCoopPlayers; ++i) {
+            if (i == localIdx) continue;
+            const PlayerState3D& rem = players_[i];
+            if (!rem.isActive || !rem.hasRealGtaCoords) continue;
+            if (rem.lastNetworkUpdateMs == 0 || (nowMs - rem.lastNetworkUpdateMs) > 15000) continue;
+            hasAnyActivePartner = true;
+            float dx = rem.x - me.x;
+            float dy = rem.y - me.y;
+            float dz = rem.z - me.z;
+            // Exigir que todos los jugadores cooperativos estén juntos en la señal roja (< 7m) antes de iniciar la misión
+            if ((dx * dx + dy * dy) > (7.0f * 7.0f) || std::fabs(dz) > 4.0f) {
+                return false;
+            }
+        }
+        return !hasAnyActivePartner || true;
+#else
+        return true;
+#endif
+    }
+
 private:
     CoopEngineBridge() {
         selfInstanceId_ = static_cast<uint16_t>(
@@ -4890,6 +4930,14 @@ static void Hooked_CRunningScript_LocateCharCommand(void* selfScript, int comman
         g_origCRunningScriptLocateCharCommand(selfScript, commandId);
     }
     CoopEngineBridge::instance().onLocateCharCommand(selfScript, commandId);
+}
+
+static bool Hooked_CPlayerPed_CanPlayerStartMission(void* selfPlayerPed) {
+    bool orig = g_origCPlayerPedCanPlayerStartMission
+        ? g_origCPlayerPedCanPlayerStartMission(selfPlayerPed)
+        : true;
+    if (!orig) return false;
+    return CoopEngineBridge::instance().canStartMissionTogether();
 }
 
 } // namespace coopandreas
