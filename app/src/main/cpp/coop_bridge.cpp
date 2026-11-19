@@ -483,6 +483,7 @@ struct GtaSaNativeSymbols {
     using FnCAutomobileSetupDamageAfterLoad = void (*)(void* selfAuto);
     using FnCRunningScriptLocateCharCommand = void (*)(void* selfScript, int commandId);
     using FnCPlayerPedCanPlayerStartMission = bool (*)(void* selfPlayerPed);
+    using FnCTaskSimpleGangDriveByCtor = void* (*)(void* self, void* pTargetEntity, const CVector* pTargetPos, float fAbortRange, int8_t nFrequencyPercentage, int8_t nDrivebyStyle, bool bSeatRHS);
 
     FnCStreamingRequestSpecialChar cstreamingRequestSpecialCharFn = nullptr;
     FnCStreamingHasSpecialCharLoaded cstreamingHasSpecialCharLoadedFn = nullptr;
@@ -503,6 +504,7 @@ struct GtaSaNativeSymbols {
     FnCAutomobileSetupDamageAfterLoad cautomobileSetupDamageAfterLoadFn = nullptr;
     FnCRunningScriptLocateCharCommand crunningScriptLocateCharCommandFn = nullptr;
     FnCPlayerPedCanPlayerStartMission cplayerPedCanPlayerStartMissionFn = nullptr;
+    FnCTaskSimpleGangDriveByCtor ctaskSimpleGangDriveByCtorFn = nullptr;
     int32_t* scriptParams = nullptr;                // ScriptParams
     void* canimManagerAssocGroups = nullptr;        // _ZN12CAnimManager19ms_aAnimAssocGroupsE
     void* canimManagerAnimBlocks = nullptr;         // _ZN12CAnimManager14ms_aAnimBlocksE
@@ -642,6 +644,7 @@ struct GtaSaNativeSymbols {
         cautomobileSetupDamageAfterLoadFn = reinterpret_cast<FnCAutomobileSetupDamageAfterLoad>(dlsym(libHandle, "_ZN11CAutomobile20SetupDamageAfterLoadEv"));
         crunningScriptLocateCharCommandFn = reinterpret_cast<FnCRunningScriptLocateCharCommand>(dlsym(libHandle, "_ZN14CRunningScript17LocateCharCommandEi"));
         cplayerPedCanPlayerStartMissionFn = reinterpret_cast<FnCPlayerPedCanPlayerStartMission>(dlsym(libHandle, "_ZN10CPlayerPed21CanPlayerStartMissionEv"));
+        ctaskSimpleGangDriveByCtorFn = reinterpret_cast<FnCTaskSimpleGangDriveByCtor>(dlsym(libHandle, "_ZN22CTaskSimpleGangDriveByC1EP7CEntityPK7CVectorfaab"));
         scriptParams = reinterpret_cast<int32_t*>(dlsym(libHandle, "ScriptParams"));
         canimManagerAssocGroups = dlsym(libHandle, "_ZN12CAnimManager19ms_aAnimAssocGroupsE");
         canimManagerAnimBlocks = dlsym(libHandle, "_ZN12CAnimManager14ms_aAnimBlocksE");
@@ -2025,8 +2028,33 @@ public:
                 }
             }
             if (resolvedVehNetId == 0) resolvedVehNetId = 101;
+
+            // Habilitar disparo real desde la ventana (Drive-By 360°) para el pasajero si lleva arma de fuego (22..34)
+            if (me.seatIndex > 0 && me.weaponId >= 22 && me.weaponId <= 34) {
+                uintptr_t localIntel = *reinterpret_cast<uintptr_t*>(localPedAddr + 0x538);
+                if (localIntel != 0) {
+                    void* secAttackTask = *reinterpret_cast<void**>(localIntel + 0x30); // m_aSecondaryTasks[0] = TASK_SECONDARY_ATTACK
+                    if (secAttackTask == nullptr &&
+                        gtaSymbols_.ctaskOperatorNewFn &&
+                        gtaSymbols_.ctaskSimpleGangDriveByCtorFn &&
+                        gtaSymbols_.ctaskManagerSetTaskSecondaryFn) {
+                        void* dbTask = gtaSymbols_.ctaskOperatorNewFn(0x60);
+                        if (dbTask) {
+                            bool seatRHS = (me.seatIndex == 1 || me.seatIndex == 3);
+                            gtaSymbols_.ctaskSimpleGangDriveByCtorFn(dbTask, nullptr, nullptr, 1000.0f, 100, 8, seatRHS);
+                            gtaSymbols_.ctaskManagerSetTaskSecondaryFn(reinterpret_cast<void*>(localIntel + 0x08), dbTask, 0);
+                            LOGI("Enabled Passenger Drive-By (CTaskSimpleGangDriveBy) on localPed=%p seat=%d wep=%d",
+                                 localPed, me.seatIndex, me.weaponId);
+                        }
+                    }
+                    me.isDriveByActive = (*reinterpret_cast<void**>(localIntel + 0x30) != nullptr);
+                }
+            } else {
+                me.isDriveByActive = false;
+            }
         } else if (!me.isAttachedOnRoof) {
             me.seatIndex = -1;
+            me.isDriveByActive = false;
         }
         me.vehicleNetId = myVeh ? resolvedVehNetId : (me.isAttachedOnRoof ? me.vehicleNetId : 0);
         me.cameraMode = 0; // Cámara 3D Independiente
@@ -4624,7 +4652,13 @@ public:
         auto* spFlt = reinterpret_cast<float*>(gtaSymbols_.scriptParams);
         bool is3D = (static_cast<uint32_t>(commandId - 0xFE) <= 5u);
         int32_t bSphere = is3D ? spInt[7] : spInt[5];
-        if (bSphere == 0) return; // Sólo interceptar marcadores rojos visibles (coronas de misión con bSphere != 0)
+        float targetX = spFlt[1];
+        float targetY = spFlt[2];
+        float rx = is3D ? spFlt[4] : spFlt[3];
+        float ry = is3D ? spFlt[5] : spFlt[4];
+        bool isSmallMissionTrigger = (std::fabs(rx) > 0.1f && std::fabs(rx) <= 2.5f &&
+                                      std::fabs(ry) > 0.1f && std::fabs(ry) <= 2.5f);
+        if (bSphere == 0 && !isSmallMissionTrigger) return;
 
         uintptr_t scriptAddr = reinterpret_cast<uintptr_t>(selfScript);
         uint8_t condResult = *reinterpret_cast<uint8_t*>(scriptAddr + 0x115);
@@ -4634,12 +4668,8 @@ public:
         bool localInsideMarker = ((condResult != 0) != (notFlag != 0));
         if (!localInsideMarker) return;
 
-        float targetX = spFlt[1];
-        float targetY = spFlt[2];
-        float rx = is3D ? spFlt[4] : spFlt[3];
-        float ry = is3D ? spFlt[5] : spFlt[4];
-        float reqRx = std::max(std::fabs(rx), 3.0f) + 2.5f;
-        float reqRy = std::max(std::fabs(ry), 3.0f) + 2.5f;
+        float reqRx = std::max(std::fabs(rx), 1.5f) + 1.2f;
+        float reqRy = std::max(std::fabs(ry), 1.5f) + 1.2f;
 
         uint64_t nowMs = currentTimeMillis();
         int localIdx = std::clamp(config_.localPlayerSlot, 1, kMaxCoopPlayers) - 1;
@@ -4685,8 +4715,8 @@ public:
             float dx = rem.x - me.x;
             float dy = rem.y - me.y;
             float dz = rem.z - me.z;
-            // Exigir que todos los jugadores cooperativos estén juntos en la señal roja (< 7m) antes de iniciar la misión
-            if ((dx * dx + dy * dy) > (7.0f * 7.0f) || std::fabs(dz) > 4.0f) {
+            // Exigir que todos los jugadores cooperativos estén literalmente juntos dentro de la señal roja (< 3.2m) antes de iniciar la misión
+            if ((dx * dx + dy * dy) > (3.2f * 3.2f) || std::fabs(dz) > 2.5f) {
                 return false;
             }
         }
