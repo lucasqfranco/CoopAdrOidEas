@@ -273,12 +273,16 @@ fun LobbyScreen(
                     if (!isOnlineMode && discovered != null) {
                         Button(
                             onClick = { viewModel.connectToDiscoveredHost() },
+                            enabled = !session.isConnectedToHost,
                             colors = ButtonDefaults.buttonColors(containerColor = GroveGreen, contentColor = Color.Black),
                             modifier = Modifier.fillMaxWidth(),
                             shape = RoundedCornerShape(10.dp)
                         ) {
                             Text(
-                                text = "⚡ CONECTAR AL HOST DETECTADO (${discovered.ip} • ${discovered.roomCode})",
+                                text = if (session.isConnectedToHost)
+                                    "✅ YA CONECTADO AL HOST (${discovered.ip} • ${session.roomCode})"
+                                else
+                                    "⚡ CONECTAR AL HOST DETECTADO (${discovered.ip} • ${discovered.roomCode})",
                                 fontFamily = BebasNeueFontFamily,
                                 fontSize = 15.sp
                             )
@@ -294,6 +298,7 @@ fun LobbyScreen(
                         OutlinedTextField(
                             value = roomOrIpInput,
                             onValueChange = { roomOrIpInput = it },
+                            enabled = !session.isConnectedToHost,
                             label = {
                                 Text(if (isOnlineMode) "Código de Sala (ej. GROVE-101)" else "IP del Host (ej. 192.168.1.45)")
                             },
@@ -314,11 +319,12 @@ fun LobbyScreen(
                                     viewModel.joinRoom(session.roomCode, roomOrIpInput.trim())
                                 }
                             },
+                            enabled = !session.isConnectedToHost,
                             colors = ButtonDefaults.buttonColors(containerColor = ArmorBlue, contentColor = Color.Black),
                             shape = RoundedCornerShape(10.dp),
                             modifier = Modifier.height(54.dp)
                         ) {
-                            Text("VINCULAR", fontFamily = BebasNeueFontFamily, fontSize = 15.sp)
+                            Text(if (session.isConnectedToHost) "CONECTADO" else "VINCULAR", fontFamily = BebasNeueFontFamily, fontSize = 15.sp)
                         }
                     }
 
@@ -359,7 +365,7 @@ fun LobbyScreen(
                             if (isHost) {
                                 clipboardManager.setText(AnnotatedString(qrPayload))
                                 viewModel.showNotification("📋 Código QR copiado: $qrPayload")
-                            } else {
+                            } else if (!session.isConnectedToHost) {
                                 val clipText = clipboardManager.getText()?.text?.trim().orEmpty()
                                 val payloadToUse = if (clipText.startsWith("COOP|", ignoreCase = true)) clipText else roomOrIpInput.trim()
                                 if (payloadToUse.isNotEmpty()) {
@@ -368,6 +374,7 @@ fun LobbyScreen(
                                 }
                             }
                         },
+                        enabled = isHost || !session.isConnectedToHost,
                         modifier = Modifier.weight(1f),
                         shape = RoundedCornerShape(10.dp),
                         border = BorderStroke(1.dp, GroveGreen)

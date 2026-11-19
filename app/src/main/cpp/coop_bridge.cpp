@@ -1888,6 +1888,12 @@ public:
                     float dvy = *reinterpret_cast<float*>(pvMat + 0x34) - myPos.y;
                     if ((dvx * dvx + dvy * dvy) < (9.5f * 9.5f)) {
                         uintptr_t pvAddr = reinterpret_cast<uintptr_t>(partnerVeh);
+                        int16_t pvModel = *reinterpret_cast<int16_t*>(pvAddr + 0x32);
+                        bool pvIsBike = (pvModel == 481 || pvModel == 509 || pvModel == 510 ||
+                                         pvModel == 448 || pvModel == 461 || pvModel == 462 ||
+                                         pvModel == 463 || pvModel == 468 || pvModel == 471 ||
+                                         pvModel == 521 || pvModel == 522 || pvModel == 523 ||
+                                         pvModel == 581 || pvModel == 586);
                         uint8_t numPass = *reinterpret_cast<uint8_t*>(pvAddr + 0x5e8);
                         uint8_t maxPass = *reinterpret_cast<uint8_t*>(pvAddr + 0x5ec);
                         bool hasFreePassengerSeat = (maxPass > 0 && numPass < maxPass);
@@ -1907,8 +1913,8 @@ public:
                                 warpPedIntoVehiclePassenger(localPed, partnerVeh, 0, localPed, true);
                                 myVeh = partnerVeh;
                             }
-                        } else {
-                            // No hay asiento libre en el vehículo (ej. bici, 1 plaza o lleno): subir al techo del vehículo del compañero
+                        } else if (!pvIsBike) {
+                            // No hay asiento libre en un vehículo de 4 ruedas (1 plaza o lleno): subir al techo del vehículo del compañero
                             if (localIntel != 0 && gtaSymbols_.ctaskManagerSetTaskFn) {
                                 gtaSymbols_.ctaskManagerSetTaskFn(reinterpret_cast<void*>(localIntel + 0x08), nullptr, 3, false);
                             }
@@ -1917,10 +1923,28 @@ public:
                             me.isAttachedOnRoof = true;
                             me.seatIndex = 4;
                             me.vehicleNetId = players_[r].vehicleNetId;
-                            me.vehicleModelId = static_cast<int32_t>(*reinterpret_cast<int16_t*>(pvAddr + 0x32));
+                            me.vehicleModelId = static_cast<int32_t>(pvModel);
                             localEnteringAsDriver = false;
                             LOGI("Attached localPed onto roof of full partnerVeh=%p (numPass=%u, maxPass=%u)",
                                  partnerVeh, static_cast<unsigned>(numPass), static_cast<unsigned>(maxPass));
+                        } else {
+                            // Es una bicicleta/moto de 1 plaza ocupada por el compañero: cancelar robo y spawnear una bici propia al lado para que cada uno tenga la suya
+                            if (localIntel != 0 && gtaSymbols_.ctaskManagerSetTaskFn) {
+                                gtaSymbols_.ctaskManagerSetTaskFn(reinterpret_cast<void*>(localIntel + 0x08), nullptr, 3, false);
+                            }
+                            localEnteringAsDriver = false;
+                            if (gtaSymbols_.ccarCtrlCreateCarForScriptFn && gtaSymbols_.isModelLoaded(pvModel) &&
+                                (tickCount - lastLocalSpareBikeTick_) >= 120) {
+                                lastLocalSpareBikeTick_ = tickCount;
+                                CVector sparePos{myPos.x + 1.8f, myPos.y + 1.2f, myPos.z + 0.3f};
+                                void* spareBike = gtaSymbols_.ccarCtrlCreateCarForScriptFn(pvModel, sparePos, 0);
+                                if (spareBike) {
+                                    *reinterpret_cast<uint8_t*>(reinterpret_cast<uintptr_t>(spareBike) + 0x610) = 2; // MISSION_VEHICLE
+                                    warpPedIntoVehicleDriver(localPed, spareBike, localPed, true);
+                                    myVeh = spareBike;
+                                    LOGI("Spawned personal spare bike (model=%d, ptr=%p) so both players have separate bikes!", pvModel, spareBike);
+                                }
+                            }
                         }
                         break;
                     }
@@ -5132,6 +5156,7 @@ private:
     void* localRoofVehPtr_ = nullptr;
     int64_t localRoofAttachTick_ = 0;
     int64_t lastGuestVehSpawnTick_ = 0;
+    int64_t lastLocalSpareBikeTick_ = 0;
     void* remotePartnerVehPtr_[kMaxCoopPlayers] = {nullptr};
     int remotePartnerVehHandle_[kMaxCoopPlayers] = {-1, -1, -1, -1};
     int64_t remoteLastVehSpawnTick_[kMaxCoopPlayers] = {0, 0, 0, 0};

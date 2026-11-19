@@ -114,6 +114,7 @@ class CoopNetworkManager(private val scope: CoroutineScope) {
 
     private var udpTelemetryVoiceSocket: DatagramSocket? = null
     private var udpCoop6767ServerSocket: DatagramSocket? = null
+    private val clientIpToSlot = java.util.concurrent.ConcurrentHashMap<String, Int>()
 
     private val okHttpClient = OkHttpClient.Builder()
         .connectTimeout(6, TimeUnit.SECONDS)
@@ -432,6 +433,9 @@ class CoopNetworkManager(private val scope: CoroutineScope) {
     }
 
     fun joinRoom(code: String, hostIpInput: String? = null): Boolean {
+        if (_session.value.isConnectedToHost) {
+            return true
+        }
         val cleanCode = code.trim().uppercase().ifBlank { _session.value.roomCode }
         val isOnlineMode = _session.value.networkMode == NetworkConnectionMode.ONLINE_REMOTE ||
                 (hostIpInput.isNullOrBlank() && _session.value.discoveredHostOnWifi == null && code.isNotBlank())
@@ -717,7 +721,13 @@ class CoopNetworkManager(private val scope: CoroutineScope) {
                 val hostY = hostTelem?.y ?: hostRef?.posY ?: -1687.0f
                 val hostZ = hostTelem?.z ?: hostRef?.posZ ?: 13.5f
 
-                val slotNum = (_session.value.players.size + 1).coerceAtMost(8)
+                val clientIp = client.inetAddress?.hostAddress ?: "unknown"
+                val existingSlot = clientIpToSlot[clientIp]
+                val slotNum = existingSlot ?: run {
+                    val nextSlot = (_session.value.players.size + 1).coerceAtMost(4)
+                    clientIpToSlot[clientIp] = nextSlot
+                    nextSlot
+                }
                 val newPlayer = CoopPlayer(
                     id = "p$slotNum",
                     name = "$clientName (P$slotNum)",
