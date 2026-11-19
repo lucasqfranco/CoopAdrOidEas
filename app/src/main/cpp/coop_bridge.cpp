@@ -484,6 +484,7 @@ struct GtaSaNativeSymbols {
     using FnCRunningScriptLocateCharCommand = void (*)(void* selfScript, int commandId);
     using FnCPlayerPedCanPlayerStartMission = bool (*)(void* selfPlayerPed);
     using FnCTaskSimpleGangDriveByCtor = void* (*)(void* self, void* pTargetEntity, const CVector* pTargetPos, float fAbortRange, int8_t nFrequencyPercentage, int8_t nDrivebyStyle, bool bSeatRHS);
+    using FnCCutsceneMgrIsSkipPressed = bool (*)();
 
     FnCStreamingRequestSpecialChar cstreamingRequestSpecialCharFn = nullptr;
     FnCStreamingHasSpecialCharLoaded cstreamingHasSpecialCharLoadedFn = nullptr;
@@ -505,6 +506,7 @@ struct GtaSaNativeSymbols {
     FnCRunningScriptLocateCharCommand crunningScriptLocateCharCommandFn = nullptr;
     FnCPlayerPedCanPlayerStartMission cplayerPedCanPlayerStartMissionFn = nullptr;
     FnCTaskSimpleGangDriveByCtor ctaskSimpleGangDriveByCtorFn = nullptr;
+    FnCCutsceneMgrIsSkipPressed ccutsceneMgrIsSkipPressedFn = nullptr;
     int32_t* scriptParams = nullptr;                // ScriptParams
     void* canimManagerAssocGroups = nullptr;        // _ZN12CAnimManager19ms_aAnimAssocGroupsE
     void* canimManagerAnimBlocks = nullptr;         // _ZN12CAnimManager14ms_aAnimBlocksE
@@ -645,6 +647,7 @@ struct GtaSaNativeSymbols {
         crunningScriptLocateCharCommandFn = reinterpret_cast<FnCRunningScriptLocateCharCommand>(dlsym(libHandle, "_ZN14CRunningScript17LocateCharCommandEi"));
         cplayerPedCanPlayerStartMissionFn = reinterpret_cast<FnCPlayerPedCanPlayerStartMission>(dlsym(libHandle, "_ZN10CPlayerPed21CanPlayerStartMissionEv"));
         ctaskSimpleGangDriveByCtorFn = reinterpret_cast<FnCTaskSimpleGangDriveByCtor>(dlsym(libHandle, "_ZN22CTaskSimpleGangDriveByC1EP7CEntityPK7CVectorfaab"));
+        ccutsceneMgrIsSkipPressedFn = reinterpret_cast<FnCCutsceneMgrIsSkipPressed>(dlsym(libHandle, "_ZN12CCutsceneMgr32IsCutsceneSkipButtonBeingPressedEv"));
         scriptParams = reinterpret_cast<int32_t*>(dlsym(libHandle, "ScriptParams"));
         canimManagerAssocGroups = dlsym(libHandle, "_ZN12CAnimManager19ms_aAnimAssocGroupsE");
         canimManagerAnimBlocks = dlsym(libHandle, "_ZN12CAnimManager14ms_aAnimBlocksE");
@@ -827,6 +830,7 @@ static GtaSaNativeSymbols::FnCRadarDrawBlips g_origCRadarDrawBlips = nullptr;
 static GtaSaNativeSymbols::FnCRunningScriptLocateCharCommand g_origCRunningScriptLocateCharCommand = nullptr;
 static GtaSaNativeSymbols::FnCPlayerPedCanPlayerStartMission g_origCPlayerPedCanPlayerStartMission = nullptr;
 static GtaSaNativeSymbols::FnCCutsceneMgrSkipCutscene g_origCCutsceneMgrSkipCutscene = nullptr;
+static GtaSaNativeSymbols::FnCCutsceneMgrIsSkipPressed g_origCCutsceneMgrIsSkipPressed = nullptr;
 static void Hooked_CWorld_Process();
 static void Hooked_CClothes_RebuildPlayer(void* playerPed, bool bIgnoreFatAndMuscle);
 static void Hooked_CClothes_RebuildPlayerIfNeeded(void* playerPed);
@@ -835,6 +839,7 @@ static void Hooked_CRadar_DrawBlips(float circleSize);
 static void Hooked_CRunningScript_LocateCharCommand(void* selfScript, int commandId);
 static bool Hooked_CPlayerPed_CanPlayerStartMission(void* selfPlayerPed);
 static void Hooked_CCutsceneMgr_SkipCutscene();
+static bool Hooked_CCutsceneMgr_IsSkipButtonPressed();
 
 class CoopEngineBridge {
 public:
@@ -892,6 +897,7 @@ public:
         g_origCRunningScriptLocateCharCommand = gtaSymbols_.crunningScriptLocateCharCommandFn;
         g_origCPlayerPedCanPlayerStartMission = gtaSymbols_.cplayerPedCanPlayerStartMissionFn;
         g_origCCutsceneMgrSkipCutscene = gtaSymbols_.ccutsceneMgrSkipCutsceneFn;
+        g_origCCutsceneMgrIsSkipPressed = gtaSymbols_.ccutsceneMgrIsSkipPressedFn;
 
         // 0. En libGTASA.so v2.10 arm64, CTaskSimpleStandStill::ProcessPed (0x5ef6ec) llama a
         // CPed::SetMoveState(ped, 1) en 0x5ef7f0 en cada frame subsiguiente, sobrescribiendo el
@@ -933,6 +939,7 @@ public:
         hookGotOffset(0x849880, reinterpret_cast<void*>(gtaSymbols_.crunningScriptLocateCharCommandFn), reinterpret_cast<void*>(&Hooked_CRunningScript_LocateCharCommand));
         hookGotOffset(0x848630, reinterpret_cast<void*>(gtaSymbols_.cplayerPedCanPlayerStartMissionFn), reinterpret_cast<void*>(&Hooked_CPlayerPed_CanPlayerStartMission));
         hookGotOffset(0x846890, reinterpret_cast<void*>(gtaSymbols_.ccutsceneMgrSkipCutsceneFn), reinterpret_cast<void*>(&Hooked_CCutsceneMgr_SkipCutscene));
+        hookGotOffset(0x8448c0, reinterpret_cast<void*>(gtaSymbols_.ccutsceneMgrIsSkipPressedFn), reinterpret_cast<void*>(&Hooked_CCutsceneMgr_IsSkipButtonPressed));
 
         // 1. Check exact GOT offset 0x843fb0 in libGTASA.so v2.10 arm64-v8a first
         if (hookGotOffset(0x843fb0, targetFn, reinterpret_cast<void*>(&Hooked_CWorld_Process))) {
@@ -989,6 +996,11 @@ public:
                     uintptr_t pageStart = p & ~static_cast<uintptr_t>(0xFFF);
                     if (::mprotect(reinterpret_cast<void*>(pageStart), 4096, PROT_READ | PROT_WRITE) == 0) {
                         *slot = reinterpret_cast<void*>(&Hooked_CCutsceneMgr_SkipCutscene);
+                    }
+                } else if (gtaSymbols_.ccutsceneMgrIsSkipPressedFn && *slot == reinterpret_cast<void*>(gtaSymbols_.ccutsceneMgrIsSkipPressedFn)) {
+                    uintptr_t pageStart = p & ~static_cast<uintptr_t>(0xFFF);
+                    if (::mprotect(reinterpret_cast<void*>(pageStart), 4096, PROT_READ | PROT_WRITE) == 0) {
+                        *slot = reinterpret_cast<void*>(&Hooked_CCutsceneMgr_IsSkipButtonPressed);
                     }
                 } else if (*slot == targetFn) {
                     uintptr_t pageStart = p & ~static_cast<uintptr_t>(0xFFF);
@@ -1620,14 +1632,19 @@ public:
                     }
                 }
                 if ((cutsceneSkipVotesMask_ & activeMask) == activeMask) {
+                    if (cutsceneSkipApprovedUntilMs_ < nowCutMs) {
+                        cutsceneSkipApprovedUntilMs_ = nowCutMs + 1200;
+                    }
                     LOGI("All co-op players voted to skip cutscene (mask=0x%x)! Skipping simultaneously.", activeMask);
-                    cutsceneSkipVotesMask_ = 0;
                     g_origCCutsceneMgrSkipCutscene();
                 }
             }
             return;
         } else if (cutsceneSkipVotesMask_ != 0) {
-            cutsceneSkipVotesMask_ = 0;
+            uint64_t nowCutMs = currentTimeMillis();
+            if (nowCutMs > cutsceneSkipApprovedUntilMs_ && (nowCutMs - lastCutsceneVoteMs_) > 2500) {
+                cutsceneSkipVotesMask_ = 0;
+            }
         }
 
         void* localPed = gtaSymbols_.findPlayerPedFn(-1);
@@ -4130,7 +4147,10 @@ public:
             case PKT_CUTSCENE_SYNC: {
                 if (len < sizeof(CutsceneSyncPacket)) return false;
                 const auto* cs = reinterpret_cast<const CutsceneSyncPacket*>(data);
-                cutsceneSkipVotesMask_ |= cs->skipVotesMask;
+                if (cs->skipVotesMask != 0) {
+                    cutsceneSkipVotesMask_ |= cs->skipVotesMask;
+                    lastCutsceneVoteMs_ = nowMs;
+                }
                 packetsProcessed_.fetch_add(1);
                 return true;
             }
@@ -4726,13 +4746,15 @@ public:
 #endif
     }
 
-    void onCutsceneSkipRequested() {
+    bool onCutsceneSkipButtonCheck(bool localPressed) {
 #if defined(__unix__) || defined(__ANDROID__) || defined(__linux__)
         uint64_t nowMs = currentTimeMillis();
         int localIdx = std::clamp(config_.localPlayerSlot, 1, kMaxCoopPlayers) - 1;
         uint8_t myBit = static_cast<uint8_t>(1U << localIdx);
-        cutsceneSkipVotesMask_ |= myBit;
-
+        if (localPressed) {
+            cutsceneSkipVotesMask_ |= myBit;
+            lastCutsceneVoteMs_ = nowMs;
+        }
         uint8_t activeMask = myBit;
         for (int i = 0; i < kMaxCoopPlayers; ++i) {
             if (i != localIdx && players_[i].isActive && players_[i].lastNetworkUpdateMs > 0 &&
@@ -4740,16 +4762,27 @@ public:
                 activeMask |= static_cast<uint8_t>(1U << i);
             }
         }
-        // Si todos los jugadores activos ya votaron (o estás solo), saltar cinemática de inmediato;
-        // si falta la aprobación del compañero, esperar a recibir su voto vía PKT_CUTSCENE_SYNC
+        // Si todos los jugadores activos ya dieron su aprobación (o si estás solo), permitir el salto simultáneo
+        // y mantener el broadcast de votos 1.2s para que el otro teléfono reciba con certeza el bit unánime
         if ((cutsceneSkipVotesMask_ & activeMask) == activeMask) {
-            cutsceneSkipVotesMask_ = 0;
+            if (cutsceneSkipApprovedUntilMs_ < nowMs) {
+                cutsceneSkipApprovedUntilMs_ = nowMs + 1200;
+                LOGI("Unanimous cutscene skip approved (votes=0x%x / active=0x%x)!", cutsceneSkipVotesMask_, activeMask);
+            }
+            return true;
+        }
+        return false;
+#else
+        return localPressed;
+#endif
+    }
+
+    void onCutsceneSkipRequested() {
+#if defined(__unix__) || defined(__ANDROID__) || defined(__linux__)
+        if (onCutsceneSkipButtonCheck(true)) {
             if (g_origCCutsceneMgrSkipCutscene) {
                 g_origCCutsceneMgrSkipCutscene();
             }
-        } else {
-            LOGI("Player P%d voted to skip cutscene (votes=0x%x / needed=0x%x); waiting for partner approval.",
-                 localIdx + 1, cutsceneSkipVotesMask_, activeMask);
         }
 #endif
     }
@@ -5149,6 +5182,8 @@ private:
     MissionSyncState mission_;
     WorldSyncState worldState_;
     uint8_t cutsceneSkipVotesMask_ = 0;
+    uint64_t cutsceneSkipApprovedUntilMs_ = 0;
+    uint64_t lastCutsceneVoteMs_ = 0;
     uint16_t selfInstanceId_ = 2;
     std::string lastWorldCheatSynced_;
     std::string lastAppliedCheatCmd_;
@@ -5260,6 +5295,13 @@ static bool Hooked_CPlayerPed_CanPlayerStartMission(void* selfPlayerPed) {
 
 static void Hooked_CCutsceneMgr_SkipCutscene() {
     CoopEngineBridge::instance().onCutsceneSkipRequested();
+}
+
+static bool Hooked_CCutsceneMgr_IsSkipButtonPressed() {
+    bool localPressed = g_origCCutsceneMgrIsSkipPressed
+        ? g_origCCutsceneMgrIsSkipPressed()
+        : false;
+    return CoopEngineBridge::instance().onCutsceneSkipButtonCheck(localPressed);
 }
 
 } // namespace coopandreas
