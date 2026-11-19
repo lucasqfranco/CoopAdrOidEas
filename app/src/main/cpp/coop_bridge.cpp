@@ -1240,7 +1240,7 @@ public:
     // ========================================================================
     // HELPER: ACTUALIZAR TRANSFORMACIÓN 3D, COLOR, DAÑO Y VELOCIDAD DE UN CVEHICLE SINCRONIZADO
     // ========================================================================
-    void applySmoothVehicleTransform(void* veh, const SyncedWorldVehicleEntry& ve) {
+    void applySmoothVehicleTransform(void* veh, const SyncedWorldVehicleEntry& ve, bool isLocalOccupiedOrEntering = false) {
 #if defined(__unix__) || defined(__ANDROID__) || defined(__linux__)
         if (!veh) return;
         uintptr_t vehAddr = reinterpret_cast<uintptr_t>(veh);
@@ -1267,7 +1267,11 @@ public:
         float nextY = (distSq > 36.0f) ? ve.y : (curY + dy * 0.65f);
         float nextZ = (distSq > 36.0f) ? ve.z : (curZ + dz * 0.65f);
 
-        bool needSectorRelink = (distSq >= 2.25f) || ((mainThreadTicks_.load() % 10) == 0);
+        // Si localPed está subiendo o viajando dentro de este vehículo, jamás llamar CWorld::Remove/Add cada 10 frames
+        // (eso abortaría CTaskComplexEnterCarAsPassenger y provocaría tirones/glitches al pasajero)
+        bool needSectorRelink = isLocalOccupiedOrEntering
+            ? (distSq >= 64.0f)
+            : ((distSq >= 2.25f) || ((mainThreadTicks_.load() % 10) == 0));
         if (needSectorRelink) {
             gtaSymbols_.cworldRemoveFn(veh);
         }
@@ -1550,6 +1554,8 @@ public:
             for (int i = 0; i < kMaxCoopPlayers; ++i) {
                 remotePedPtr_[i] = nullptr;
                 remotePedHandle_[i] = -1;
+                specialSlotRequestedSkin_[i] = -1;
+                remoteWasJumping_[i] = false;
             }
             for (int k = 0; k < kMaxSyncedWorldPeds; ++k) {
                 worldSyncPedPtr_[k] = nullptr;
@@ -1578,6 +1584,8 @@ public:
             for (int i = 0; i < kMaxCoopPlayers; ++i) {
                 remotePedPtr_[i] = nullptr;
                 remotePedHandle_[i] = -1;
+                specialSlotRequestedSkin_[i] = -1;
+                remoteWasJumping_[i] = false;
             }
             for (int k = 0; k < kMaxSyncedWorldPeds; ++k) {
                 worldSyncPedPtr_[k] = nullptr;
@@ -1708,12 +1716,15 @@ public:
                 }
                 if (gtaSymbols_.ctaskManagerFindActiveTaskByTypeFn) {
                     void* localTaskMgr = reinterpret_cast<void*>(localIntelPtr + 0x08);
-                    if (gtaSymbols_.ctaskManagerFindActiveTaskByTypeFn(localTaskMgr, 211 /*TASK_COMPLEX_JUMP*/) != nullptr ||
-                        gtaSymbols_.ctaskManagerFindActiveTaskByTypeFn(localTaskMgr, 212 /*TASK_SIMPLE_JUMP*/) != nullptr ||
-                        gtaSymbols_.ctaskManagerFindActiveTaskByTypeFn(localTaskMgr, 254 /*TASK_SIMPLE_CLIMB*/) != nullptr) {
+                    if (gtaSymbols_.ctaskManagerFindActiveTaskByTypeFn(localTaskMgr, 210 /*TASK_SIMPLE_JUMP*/) != nullptr ||
+                        gtaSymbols_.ctaskManagerFindActiveTaskByTypeFn(localTaskMgr, 211 /*TASK_COMPLEX_JUMP*/) != nullptr ||
+                        gtaSymbols_.ctaskManagerFindActiveTaskByTypeFn(localTaskMgr, 267 /*TASK_COMPLEX_CLIMB*/) != nullptr) {
                         localIsJumping = true;
                     }
                 }
+            }
+            if (!myVeh && !localIsJumping && mySpeed.z > 0.08f) {
+                localIsJumping = true;
             }
             if (curWepState == 1) { // WEAPONSTATE_FIRING
                 combatFlags |= (me.weaponId >= 22) ? 0x06u : 0x01u;
@@ -1724,7 +1735,8 @@ public:
             me.isAiming = ((combatFlags & 0x02u) != 0) ? 1u : 0u;
         }
 
-        // Detectar si el jugador local a pie tiene una tarea activa de entrada/robo de vehículo (700/701/712/713)
+        // Detectar si el jugador local a pie tiene una tarea activa de entrada/robo de vehículo:
+        // En libGTASA.so arm64 v2.10: 700 = CTaskComplexEnterCarAsPassenger, 701 = CTaskComplexEnterCarAsDriver, 713 = EnterCarAsDriverTimed
         bool localTryingToEnterCar = false;
         bool localEnteringAsDriver = false;
         bool localAlreadyEnteringAsPassenger = false;
@@ -1732,12 +1744,12 @@ public:
             uintptr_t localIntel = *reinterpret_cast<uintptr_t*>(localPedAddr + 0x538);
             if (localIntel != 0 && gtaSymbols_.ctaskManagerFindActiveTaskByTypeFn) {
                 void* taskMgr = reinterpret_cast<void*>(localIntel + 0x08);
-                if (gtaSymbols_.ctaskManagerFindActiveTaskByTypeFn(taskMgr, 701 /*TASK_COMPLEX_ENTER_CAR_AS_PASSENGER*/) ||
-                    gtaSymbols_.ctaskManagerFindActiveTaskByTypeFn(taskMgr, 713)) {
+                if (gtaSymbols_.ctaskManagerFindActiveTaskByTypeFn(taskMgr, 700 /*TASK_COMPLEX_ENTER_CAR_AS_PASSENGER*/) ||
+                    gtaSymbols_.ctaskManagerFindActiveTaskByTypeFn(taskMgr, 712 /*TASK_COMPLEX_ENTER_CAR_AS_PASSENGER_WAIT*/)) {
                     localTryingToEnterCar = true;
                     localAlreadyEnteringAsPassenger = true;
-                } else if (gtaSymbols_.ctaskManagerFindActiveTaskByTypeFn(taskMgr, 700 /*TASK_COMPLEX_ENTER_CAR_AS_DRIVER*/) ||
-                           gtaSymbols_.ctaskManagerFindActiveTaskByTypeFn(taskMgr, 712)) {
+                } else if (gtaSymbols_.ctaskManagerFindActiveTaskByTypeFn(taskMgr, 701 /*TASK_COMPLEX_ENTER_CAR_AS_DRIVER*/) ||
+                           gtaSymbols_.ctaskManagerFindActiveTaskByTypeFn(taskMgr, 713 /*TASK_COMPLEX_ENTER_CAR_AS_DRIVER_TIMED*/)) {
                     localTryingToEnterCar = true;
                     localEnteringAsDriver = true;
                 }
@@ -1785,13 +1797,16 @@ public:
                     float dvx = *reinterpret_cast<float*>(pvMat + 0x30) - myPos.x;
                     float dvy = *reinterpret_cast<float*>(pvMat + 0x34) - myPos.y;
                     if ((dvx * dvx + dvy * dvy) < (9.5f * 9.5f)) {
-                        // Convertir la tarea de robo de conductor (700) en entrada nativa como pasajero (701) con animación real de puerta
+                        // Convertir la tarea de robo de conductor (701) en entrada nativa como pasajero (700) con animación real de puerta
                         if (localIntel != 0 && gtaSymbols_.ctaskComplexEnterCarAsPassengerCtorFn &&
                             gtaSymbols_.ctaskOperatorNewFn && gtaSymbols_.ctaskManagerSetTaskFn) {
                             void* passTask = gtaSymbols_.ctaskOperatorNewFn(0x70);
                             if (passTask) {
                                 gtaSymbols_.ctaskComplexEnterCarAsPassengerCtorFn(passTask, partnerVeh, 0, false);
                                 gtaSymbols_.ctaskManagerSetTaskFn(reinterpret_cast<void*>(localIntel + 0x08), passTask, 3, false);
+                                localEnteringAsDriver = false;
+                                localAlreadyEnteringAsPassenger = true;
+                                LOGI("Redirected localPed to CTaskComplexEnterCarAsPassenger (700) on partnerVeh=%p", partnerVeh);
                             }
                         } else {
                             warpPedIntoVehiclePassenger(localPed, partnerVeh, 0, localPed, true);
@@ -1937,37 +1952,31 @@ public:
         }
 
         // Publicar y aplicar la Skin elegida del jugador local usando la secuencia exacta de 09C7 (CHANGE_PLAYER_MODEL)
-        // protegida por los hooks GOT en CClothes::RebuildPlayer / RebuildPlayerIfNeeded / RebuildCutscenePlayer.
+        // soportando tanto modelos normales de peds.ide como personajes especiales de historia (Claude, Sweet, Ryder, Smoke, etc.)
         me.skinModelId = config_.localSkinModelId;
         if (!myVeh && tickCount >= 60) {
             int16_t curLocalModel = *reinterpret_cast<int16_t*>(localPedAddr + 0x32);
             if (config_.localSkinModelId > 0) {
-                int32_t targetLocalModel = resolveSafePedModelId(config_.localSkinModelId);
-                if (targetLocalModel > 0 && !gtaSymbols_.isValidModelInfo(targetLocalModel)) {
-                    targetLocalModel = 105;
-                }
-                if (targetLocalModel > 0 && curLocalModel != targetLocalModel) {
-                    if (!gtaSymbols_.isModelLoaded(targetLocalModel)) {
-                        if ((tickCount % 5 == 0) && gtaSymbols_.cstreamingRequestModelFn) {
-                            gtaSymbols_.cstreamingRequestModelFn(targetLocalModel, 2);
-                        }
-                    } else {
-                        uintptr_t vtbl = *reinterpret_cast<uintptr_t*>(localPedAddr);
-                        if (vtbl != 0) {
-                            uint32_t savedAnimGroup = *reinterpret_cast<uint32_t*>(localPedAddr + 0x630);
-                            using FnDeleteRwObject = void (*)(void*);
-                            using FnVtblSetModelIndex = void (*)(void*, uint32_t);
-                            auto deleteRwObjFn = *reinterpret_cast<FnDeleteRwObject*>(vtbl + 0x48);
-                            auto setModelIdxFn = *reinterpret_cast<FnVtblSetModelIndex*>(vtbl + 0x30);
-                            if (deleteRwObjFn && setModelIdxFn) {
-                                deleteRwObjFn(localPed);
-                                *reinterpret_cast<uint16_t*>(localPedAddr + 0x32) = 0xFFFF;
-                                setModelIdxFn(localPed, static_cast<uint32_t>(targetLocalModel));
-                                *reinterpret_cast<uint32_t*>(localPedAddr + 0x630) = savedAnimGroup;
-                                localAppliedSkinModel_ = targetLocalModel;
-                                LOGI("Applied 09C7 Local Player Skin on CPlayerPed=%p (reqSkin=%d -> model=%d)",
-                                     localPed, config_.localSkinModelId, targetLocalModel);
-                            }
+                bool localSkinLoaded = false;
+                int32_t targetLocalModel = resolvePlayerSkinModelId(
+                    config_.localSkinModelId, localIdx, (tickCount % 5 == 0), localSkinLoaded
+                );
+                if (targetLocalModel > 0 && localSkinLoaded && curLocalModel != targetLocalModel) {
+                    uintptr_t vtbl = *reinterpret_cast<uintptr_t*>(localPedAddr);
+                    if (vtbl != 0) {
+                        uint32_t savedAnimGroup = *reinterpret_cast<uint32_t*>(localPedAddr + 0x630);
+                        using FnDeleteRwObject = void (*)(void*);
+                        using FnVtblSetModelIndex = void (*)(void*, uint32_t);
+                        auto deleteRwObjFn = *reinterpret_cast<FnDeleteRwObject*>(vtbl + 0x48);
+                        auto setModelIdxFn = *reinterpret_cast<FnVtblSetModelIndex*>(vtbl + 0x30);
+                        if (deleteRwObjFn && setModelIdxFn) {
+                            deleteRwObjFn(localPed);
+                            *reinterpret_cast<uint16_t*>(localPedAddr + 0x32) = 0xFFFF;
+                            setModelIdxFn(localPed, static_cast<uint32_t>(targetLocalModel));
+                            *reinterpret_cast<uint32_t*>(localPedAddr + 0x630) = savedAnimGroup;
+                            localAppliedSkinModel_ = targetLocalModel;
+                            LOGI("Applied 09C7 Local Player Skin on CPlayerPed=%p (reqSkin=%d -> model=%d)",
+                                 localPed, config_.localSkinModelId, targetLocalModel);
                         }
                     }
                 }
@@ -2835,7 +2844,9 @@ public:
                     float wvy = wvMat ? *reinterpret_cast<float*>(wvMat + 0x34) : ve.y;
                     float dxLoc = wvx - myPos.x;
                     float dyLoc = wvy - myPos.y;
-                    bool localCarjackingThisVeh = (localTryingToEnterCar && (dxLoc * dxLoc + dyLoc * dyLoc) < (8.5f * 8.5f));
+                    float localDistSq = dxLoc * dxLoc + dyLoc * dyLoc;
+                    bool localCarjackingThisVeh = (localEnteringAsDriver && localDistSq < (8.5f * 8.5f));
+                    bool localEnteringThisAsPass = (localAlreadyEnteringAsPassenger && localDistSq < (9.5f * 9.5f));
 
                     // Garantizar que todo vehículo NPC tenga a lo sumo 1 conductor instanciado (nunca re-spawnear tras ser bajado)
                     if (wVeh != myVeh) {
@@ -2901,9 +2912,13 @@ public:
                     }
 
                     // Si el vehículo es nuestro pero somos pasajeros (me.seatIndex > 0) o no estamos en él (ni robándolo),
-                    // aplicar la posición sincronizada del Host/conductor
+                    // aplicar la posición sincronizada del Host/conductor sin relinkear CWorld si localPed está subiendo o viajando dentro
                     if ((wVeh != myVeh && !localCarjackingThisVeh) || me.seatIndex > 0) {
-                        applySmoothVehicleTransform(wVeh, ve);
+                        bool isLocalInOrEntering = (wVeh == myVeh) || localEnteringThisAsPass;
+                        applySmoothVehicleTransform(wVeh, ve, isLocalInOrEntering);
+                        if (wVeh == myVeh && me.seatIndex > 0 && gtaSymbols_.cpedSetPedPositionInCarFn) {
+                            gtaSymbols_.cpedSetPedPositionInCarFn(localPed);
+                        }
                     }
                 }
             }
@@ -2985,20 +3000,10 @@ public:
             // Si el CPed remoto aún no fue creado en el mundo 3D, instanciarlo siguiendo la secuencia exacta de CREATE_CHAR (009A)
             if (!ped && gtaSymbols_.cpedOperatorNewFn && gtaSymbols_.ccivilianPedCtorFn && gtaSymbols_.cworldAddFn) {
                 uint32_t spawnModel = 0;
-                int32_t desiredRemModel = resolveSafePedModelId(rem.skinModelId);
-                if (desiredRemModel > 0 && !gtaSymbols_.isValidModelInfo(desiredRemModel)) {
-                    desiredRemModel = 105; // Fallback seguro a FAM1 (Grove Street)
-                }
-                if (desiredRemModel > 0) {
-                    if (!gtaSymbols_.isModelLoaded(desiredRemModel) && gtaSymbols_.cstreamingRequestModelFn) {
-                        gtaSymbols_.cstreamingRequestModelFn(desiredRemModel, 2);
-                        if (gtaSymbols_.cstreamingLoadAllRequestedModelsFn) {
-                            gtaSymbols_.cstreamingLoadAllRequestedModelsFn(false);
-                        }
-                    }
-                    if (gtaSymbols_.isModelLoaded(desiredRemModel)) {
-                        spawnModel = static_cast<uint32_t>(desiredRemModel);
-                    }
+                bool remSkinLoaded = false;
+                int32_t desiredRemModel = resolvePlayerSkinModelId(rem.skinModelId, i, true, remSkinLoaded);
+                if (desiredRemModel > 0 && remSkinLoaded) {
+                    spawnModel = static_cast<uint32_t>(desiredRemModel);
                 }
                 void* newPed = gtaSymbols_.cpedOperatorNewFn(0x9c8);
                 if (newPed) {
@@ -3092,24 +3097,16 @@ public:
                 bool remCurrentlyInVeh = ((remPedFlags & 1) != 0);
                 void* remCurrentVeh = remCurrentlyInVeh ? *reinterpret_cast<void**>(remPedAddr + 0x708) : nullptr;
 
-                // Sincronizar modelo de skin del compañero remoto (si eligió skin distinta de CJ)
+                // Sincronizar modelo de skin del compañero remoto (soportando modelos normales y personajes especiales de historia)
                 if (rem.skinModelId > 0 && !remCurrentlyInVeh) {
-                    int32_t targetRemModel = resolveSafePedModelId(rem.skinModelId);
-                    if (targetRemModel > 0 && !gtaSymbols_.isValidModelInfo(targetRemModel)) {
-                        targetRemModel = 105;
-                    }
-                    if (targetRemModel > 0 && remotePedSpawnedModel_[i] != targetRemModel) {
-                        if (!gtaSymbols_.isModelLoaded(targetRemModel)) {
-                            if ((tickCount % 5 == 0) && gtaSymbols_.cstreamingRequestModelFn) {
-                                gtaSymbols_.cstreamingRequestModelFn(targetRemModel, 2);
-                            }
-                        } else if (gtaSymbols_.cpedSetModelIndexFn) {
-                            gtaSymbols_.cpedSetModelIndexFn(ped, static_cast<uint32_t>(targetRemModel));
-                            remotePedSpawnedModel_[i] = targetRemModel;
-                            remotePedEquippedWeapon_[i] = -1; // Re-equipar arma tras cambio de modelo 3D
-                            LOGI("Updated 3D Remote Player P%d Skin (ped=%p, reqSkin=%d -> safeModel=%d, isModelLoaded=1)",
-                                 i + 1, ped, rem.skinModelId, targetRemModel);
-                        }
+                    bool remSkinLoaded = false;
+                    int32_t targetRemModel = resolvePlayerSkinModelId(rem.skinModelId, i, (tickCount % 5 == 0), remSkinLoaded);
+                    if (targetRemModel > 0 && remSkinLoaded && remotePedSpawnedModel_[i] != targetRemModel && gtaSymbols_.cpedSetModelIndexFn) {
+                        gtaSymbols_.cpedSetModelIndexFn(ped, static_cast<uint32_t>(targetRemModel));
+                        remotePedSpawnedModel_[i] = targetRemModel;
+                        remotePedEquippedWeapon_[i] = -1; // Re-equipar arma tras cambio de modelo 3D
+                        LOGI("Updated 3D Remote Player P%d Skin (ped=%p, reqSkin=%d -> model=%d, isModelLoaded=1)",
+                             i + 1, ped, rem.skinModelId, targetRemModel);
                     }
                 }
 
@@ -3289,7 +3286,10 @@ public:
                                 remVe.damageDoorsHigh = rem.damageDoorsHigh;
                                 remVe.damageLights = rem.damageLights;
                                 remVe.damagePanels = rem.damagePanels;
-                                applySmoothVehicleTransform(targetVeh, remVe);
+                                applySmoothVehicleTransform(targetVeh, remVe, targetVeh == myVeh);
+                                if (targetVeh == myVeh && me.seatIndex > 0 && gtaSymbols_.cpedSetPedPositionInCarFn) {
+                                    gtaSymbols_.cpedSetPedPositionInCarFn(localPed);
+                                }
                             }
                         } else {
                             // Compañero remoto como pasajero (o ambos en el mismo auto donde localPed es conductor)
@@ -3321,9 +3321,15 @@ public:
                     );
                     void* remClump = *reinterpret_cast<void**>(remPedAddr + 0x20);
                     if (remClump != nullptr) {
-                        if (rem.isJumping != 0 && (tickCount % 10 == 0)) {
-                            safeBlendAnimation(remClump, 0 /*ASSOCGRP_DEFAULT*/, 114 /*ANIM_DEFAULT_JUMP_GLIDE*/, 8.0f);
+                        bool isJumpNow = (rem.isJumping != 0);
+                        if (isJumpNow && !remoteWasJumping_[i]) {
+                            safeBlendAnimation(remClump, 0 /*ASSOCGRP_DEFAULT*/, 116 /*JUMP_launch*/, 8.0f);
+                        } else if (isJumpNow && (tickCount % 8 == 0)) {
+                            safeBlendAnimation(remClump, 0 /*ASSOCGRP_DEFAULT*/, 118 /*JUMP_glide*/, 4.0f);
+                        } else if (!isJumpNow && remoteWasJumping_[i]) {
+                            safeBlendAnimation(remClump, 0 /*ASSOCGRP_DEFAULT*/, 119 /*JUMP_land*/, 8.0f);
                         }
+                        remoteWasJumping_[i] = isJumpNow;
                         // Reproducir animaciones 3D de golpe/ataque cuerpo a cuerpo o disparo de forma segura (verificando CAnimBlock::bLoaded)
                         if (rem.animGroupId != 0 && (tickCount % 10 == 0)) {
                             if ((rem.animGroupId & 0x06u) != 0 && rem.weaponId >= 22 && gtaSymbols_.cweaponInfoGetWeaponInfoFn) {
@@ -4627,6 +4633,87 @@ private:
         }
     }
 
+    static const char* getSpecialCharDffName(int32_t modelId) {
+        switch (modelId) {
+            case 1:   return "truth";
+            case 2:   return "maccer";
+            case 3:   return "andre";
+            case 4:   return "bbthin";
+            case 5:   return "bb";
+            case 6:   return "emmet";
+            case 8:   return "janitor";
+            case 42:  return "jethro";
+            case 65:  return "kendl";
+            case 86:  return "ryder3";
+            case 149: return "smokev";
+            case 265: return "tenpen";
+            case 266: return "pulaski";
+            case 267: return "hern";
+            case 268: return "dwaine";
+            case 269: return "smoke";
+            case 270: return "sweet";
+            case 271: return "ryder";
+            case 272: return "forelli";
+            case 273: return "tbone";
+            case 289: return "zero";
+            case 290: return "rose";
+            case 291: return "paul";
+            case 292: return "cesar";
+            case 293: return "ogloc";
+            case 294: return "wuzimu";
+            case 295: return "torino";
+            case 296: return "jizzy";
+            case 297: return "maddogg";
+            case 298: return "cat";
+            case 299: return "claude";
+            default:  return nullptr;
+        }
+    }
+
+    int32_t resolvePlayerSkinModelId(int32_t reqSkinId, int playerIdx, bool canRequestStreaming, bool& outLoaded) {
+        outLoaded = false;
+        if (reqSkinId <= 0) {
+            outLoaded = true;
+            return 0;
+        }
+        int clampedIdx = std::clamp(playerIdx, 0, kMaxCoopPlayers - 1);
+        const char* specialName = getSpecialCharDffName(reqSkinId);
+        if (specialName != nullptr &&
+            gtaSymbols_.cstreamingRequestSpecialCharFn &&
+            gtaSymbols_.cstreamingHasSpecialCharLoadedFn) {
+            // Usar slots especiales dedicados 6..9 (modelos 296..299) para P1..P4 sin colisionar con actores de misión (0..5)
+            int specialSlot = 6 + clampedIdx;
+            int32_t specialModelId = 290 + specialSlot;
+            if (specialSlotRequestedSkin_[clampedIdx] != reqSkinId) {
+                gtaSymbols_.cstreamingRequestSpecialCharFn(specialSlot, specialName, 2);
+                specialSlotRequestedSkin_[clampedIdx] = reqSkinId;
+                return specialModelId;
+            }
+            bool loaded = gtaSymbols_.cstreamingHasSpecialCharLoadedFn(specialSlot) &&
+                          gtaSymbols_.isValidModelInfo(specialModelId);
+            if (!loaded && canRequestStreaming) {
+                gtaSymbols_.cstreamingRequestSpecialCharFn(specialSlot, specialName, 2);
+            }
+            outLoaded = loaded;
+            return specialModelId;
+        }
+
+        int32_t safeModel = resolveSafePedModelId(reqSkinId);
+        if (safeModel > 0 && !gtaSymbols_.isValidModelInfo(safeModel)) {
+            safeModel = 105;
+        }
+        if (safeModel <= 0) {
+            outLoaded = true;
+            return 0;
+        }
+        if (gtaSymbols_.isModelLoaded(safeModel)) {
+            outLoaded = true;
+        } else if (canRequestStreaming && gtaSymbols_.cstreamingRequestModelFn) {
+            gtaSymbols_.cstreamingRequestModelFn(safeModel, 2);
+        }
+        return safeModel;
+    }
+
     static int32_t resolveSafePedModelId(int32_t modelId) {
         if (modelId <= 0) return 0;
         switch (modelId) {
@@ -4727,6 +4814,8 @@ private:
     void* remotePedPtr_[kMaxCoopPlayers] = {nullptr};
     int remotePedHandle_[kMaxCoopPlayers] = {-1, -1, -1, -1};
     int remotePedSpawnedModel_[kMaxCoopPlayers] = {0};
+    int32_t specialSlotRequestedSkin_[kMaxCoopPlayers] = {-1, -1, -1, -1};
+    bool remoteWasJumping_[kMaxCoopPlayers] = {false, false, false, false};
     int32_t remotePedEquippedWeapon_[kMaxCoopPlayers] = {-1, -1, -1, -1};
     int remoteBlipHandle_[kMaxCoopPlayers] = {-1, -1, -1, -1};
     int remoteBlipColor_[kMaxCoopPlayers] = {-1, -1, -1, -1};

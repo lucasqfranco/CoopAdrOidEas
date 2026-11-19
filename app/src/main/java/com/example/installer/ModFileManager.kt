@@ -972,7 +972,7 @@ class ModFileManager(private val context: Context) {
             Custom_Opcodes_Range = 0D00-0D04
 
             [PLAYER_IDENTITY]
-            Local_Skin_ID = ${getSkinModelId(_status.value.mySelectedSkin)}
+            Local_Skin_ID = ${getEffectiveLocalSkinModelId()}
             Player1_Skin_ID = ${if (isHost) getEffectiveLocalSkinModelId() else getSkinModelId(_status.value.partnerSkin)}
             Player1_Name = ${if (isHost) _status.value.mySelectedSkin.displayName else _status.value.partnerSkin.displayName}
             Player_Marker_Color = ${_status.value.myMarkerColor.radarColorId}
