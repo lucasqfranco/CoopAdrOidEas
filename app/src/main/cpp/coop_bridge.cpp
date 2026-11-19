@@ -823,6 +823,7 @@ static GtaSaNativeSymbols::FnCClothesRebuildCutscenePlayer g_origCClothesRebuild
 static GtaSaNativeSymbols::FnCRadarDrawBlips g_origCRadarDrawBlips = nullptr;
 static GtaSaNativeSymbols::FnCRunningScriptLocateCharCommand g_origCRunningScriptLocateCharCommand = nullptr;
 static GtaSaNativeSymbols::FnCPlayerPedCanPlayerStartMission g_origCPlayerPedCanPlayerStartMission = nullptr;
+static GtaSaNativeSymbols::FnCCutsceneMgrSkipCutscene g_origCCutsceneMgrSkipCutscene = nullptr;
 static void Hooked_CWorld_Process();
 static void Hooked_CClothes_RebuildPlayer(void* playerPed, bool bIgnoreFatAndMuscle);
 static void Hooked_CClothes_RebuildPlayerIfNeeded(void* playerPed);
@@ -830,6 +831,7 @@ static void Hooked_CClothes_RebuildCutscenePlayer(void* playerPed, int modelId);
 static void Hooked_CRadar_DrawBlips(float circleSize);
 static void Hooked_CRunningScript_LocateCharCommand(void* selfScript, int commandId);
 static bool Hooked_CPlayerPed_CanPlayerStartMission(void* selfPlayerPed);
+static void Hooked_CCutsceneMgr_SkipCutscene();
 
 class CoopEngineBridge {
 public:
@@ -886,6 +888,7 @@ public:
         g_origCRadarDrawBlips = gtaSymbols_.cradarDrawBlipsFn;
         g_origCRunningScriptLocateCharCommand = gtaSymbols_.crunningScriptLocateCharCommandFn;
         g_origCPlayerPedCanPlayerStartMission = gtaSymbols_.cplayerPedCanPlayerStartMissionFn;
+        g_origCCutsceneMgrSkipCutscene = gtaSymbols_.ccutsceneMgrSkipCutsceneFn;
 
         // 0. En libGTASA.so v2.10 arm64, CTaskSimpleStandStill::ProcessPed (0x5ef6ec) llama a
         // CPed::SetMoveState(ped, 1) en 0x5ef7f0 en cada frame subsiguiente, sobrescribiendo el
@@ -926,6 +929,7 @@ public:
         hookGotOffset(0x83ded0, reinterpret_cast<void*>(gtaSymbols_.cradarDrawBlipsFn), reinterpret_cast<void*>(&Hooked_CRadar_DrawBlips));
         hookGotOffset(0x849880, reinterpret_cast<void*>(gtaSymbols_.crunningScriptLocateCharCommandFn), reinterpret_cast<void*>(&Hooked_CRunningScript_LocateCharCommand));
         hookGotOffset(0x848630, reinterpret_cast<void*>(gtaSymbols_.cplayerPedCanPlayerStartMissionFn), reinterpret_cast<void*>(&Hooked_CPlayerPed_CanPlayerStartMission));
+        hookGotOffset(0x846890, reinterpret_cast<void*>(gtaSymbols_.ccutsceneMgrSkipCutsceneFn), reinterpret_cast<void*>(&Hooked_CCutsceneMgr_SkipCutscene));
 
         // 1. Check exact GOT offset 0x843fb0 in libGTASA.so v2.10 arm64-v8a first
         if (hookGotOffset(0x843fb0, targetFn, reinterpret_cast<void*>(&Hooked_CWorld_Process))) {
@@ -977,6 +981,11 @@ public:
                     uintptr_t pageStart = p & ~static_cast<uintptr_t>(0xFFF);
                     if (::mprotect(reinterpret_cast<void*>(pageStart), 4096, PROT_READ | PROT_WRITE) == 0) {
                         *slot = reinterpret_cast<void*>(&Hooked_CPlayerPed_CanPlayerStartMission);
+                    }
+                } else if (gtaSymbols_.ccutsceneMgrSkipCutsceneFn && *slot == reinterpret_cast<void*>(gtaSymbols_.ccutsceneMgrSkipCutsceneFn)) {
+                    uintptr_t pageStart = p & ~static_cast<uintptr_t>(0xFFF);
+                    if (::mprotect(reinterpret_cast<void*>(pageStart), 4096, PROT_READ | PROT_WRITE) == 0) {
+                        *slot = reinterpret_cast<void*>(&Hooked_CCutsceneMgr_SkipCutscene);
                     }
                 } else if (*slot == targetFn) {
                     uintptr_t pageStart = p & ~static_cast<uintptr_t>(0xFFF);
@@ -1252,7 +1261,7 @@ public:
     // ========================================================================
     // HELPER: ACTUALIZAR TRANSFORMACIÓN 3D, COLOR, DAÑO Y VELOCIDAD DE UN CVEHICLE SINCRONIZADO
     // ========================================================================
-    void applySmoothVehicleTransform(void* veh, const SyncedWorldVehicleEntry& ve, bool isLocalOccupiedOrEntering = false) {
+    void applySmoothVehicleTransform(void* veh, const SyncedWorldVehicleEntry& ve, bool isLocalOccupiedOrEntering = false, uint64_t lastNetMs = 0) {
 #if defined(__unix__) || defined(__ANDROID__) || defined(__linux__)
         if (!veh) return;
         uintptr_t vehAddr = reinterpret_cast<uintptr_t>(veh);
@@ -1267,17 +1276,34 @@ public:
             ve.damageWheels, ve.damageDoorsLow, ve.damageDoorsHigh, ve.damageLights, ve.damagePanels
         );
 
+        float vx = std::isfinite(ve.vx) ? ve.vx : 0.0f;
+        float vy = std::isfinite(ve.vy) ? ve.vy : 0.0f;
+        float vz = std::isfinite(ve.vz) ? ve.vz : 0.0f;
+
+        // Dead-reckoning (extrapolación suave por latencia Wi-Fi) para eliminar el efecto serrucho/trabado en la pantalla del pasajero
+        float leadFrames = 0.0f;
+        if (lastNetMs > 0) {
+            uint64_t nowMs = currentTimeMillis();
+            if (nowMs > lastNetMs && (nowMs - lastNetMs) < 180) {
+                leadFrames = std::clamp(static_cast<float>(nowMs - lastNetMs) / 16.666f, 0.0f, 3.0f);
+            }
+        }
+        float targetX = ve.x + vx * leadFrames;
+        float targetY = ve.y + vy * leadFrames;
+        float targetZ = ve.z + vz * leadFrames;
+
         float curX = *reinterpret_cast<float*>(mat + 0x30);
         float curY = *reinterpret_cast<float*>(mat + 0x34);
         float curZ = *reinterpret_cast<float*>(mat + 0x38);
-        float dx = ve.x - curX;
-        float dy = ve.y - curY;
-        float dz = ve.z - curZ;
+        float dx = targetX - curX;
+        float dy = targetY - curY;
+        float dz = targetZ - curZ;
         float distSq = dx * dx + dy * dy + dz * dz;
 
-        float nextX = (distSq > 36.0f) ? ve.x : (curX + dx * 0.65f);
-        float nextY = (distSq > 36.0f) ? ve.y : (curY + dy * 0.65f);
-        float nextZ = (distSq > 36.0f) ? ve.z : (curZ + dz * 0.65f);
+        float posAlpha = isLocalOccupiedOrEntering ? 0.25f : 0.38f;
+        float nextX = (distSq > 64.0f) ? targetX : (curX + dx * posAlpha);
+        float nextY = (distSq > 64.0f) ? targetY : (curY + dy * posAlpha);
+        float nextZ = (distSq > 64.0f) ? targetZ : (curZ + dz * posAlpha);
 
         // Si localPed está subiendo o viajando dentro de este vehículo, jamás llamar CWorld::Remove/Add cada 10 frames
         // (eso abortaría CTaskComplexEnterCarAsPassenger y provocaría tirones/glitches al pasajero)
@@ -1288,11 +1314,40 @@ public:
             gtaSymbols_.cworldRemoveFn(veh);
         }
 
-        float rx = ve.rightX, ry = ve.rightY, rz = ve.rightZ;
-        float ux = ve.upX, uy = ve.upY, uz = ve.upZ;
-        float ax = ry * uz - rz * uy;
-        float ay = rz * ux - rx * uz;
-        float az = rx * uy - ry * ux;
+        // Interpolar y re-ortonormalizar la matriz de rotación para giros fluidos sin saltos bruscos
+        float curRx = *reinterpret_cast<float*>(mat + 0x00);
+        float curRy = *reinterpret_cast<float*>(mat + 0x04);
+        float curRz = *reinterpret_cast<float*>(mat + 0x08);
+        float curUx = *reinterpret_cast<float*>(mat + 0x10);
+        float curUy = *reinterpret_cast<float*>(mat + 0x14);
+        float curUz = *reinterpret_cast<float*>(mat + 0x18);
+
+        float rotAlpha = (distSq > 64.0f) ? 1.0f : (isLocalOccupiedOrEntering ? 0.28f : 0.40f);
+        float ux = curUx + (ve.upX - curUx) * rotAlpha;
+        float uy = curUy + (ve.upY - curUy) * rotAlpha;
+        float uz = curUz + (ve.upZ - curUz) * rotAlpha;
+        float uLen = std::sqrt(ux * ux + uy * uy + uz * uz);
+        if (uLen > 1e-4f) {
+            ux /= uLen; uy /= uLen; uz /= uLen;
+        } else {
+            ux = ve.upX; uy = ve.upY; uz = ve.upZ;
+        }
+
+        float rxTmp = curRx + (ve.rightX - curRx) * rotAlpha;
+        float ryTmp = curRy + (ve.rightY - curRy) * rotAlpha;
+        float rzTmp = curRz + (ve.rightZ - curRz) * rotAlpha;
+        float ax = ryTmp * uz - rzTmp * uy;
+        float ay = rzTmp * ux - rxTmp * uz;
+        float az = rxTmp * uy - ryTmp * ux;
+        float aLen = std::sqrt(ax * ax + ay * ay + az * az);
+        if (aLen > 1e-4f) {
+            ax /= aLen; ay /= aLen; az /= aLen;
+        } else {
+            ax = 0.0f; ay = 0.0f; az = 1.0f;
+        }
+        float rx = uy * az - uz * ay;
+        float ry = uz * ax - ux * az;
+        float rz = ux * ay - uy * ax;
 
         *reinterpret_cast<float*>(mat + 0x00) = rx;
         *reinterpret_cast<float*>(mat + 0x04) = ry;
@@ -1310,10 +1365,15 @@ public:
         *reinterpret_cast<float*>(vehAddr + 0x08) = nextX;
         *reinterpret_cast<float*>(vehAddr + 0x0c) = nextY;
         *reinterpret_cast<float*>(vehAddr + 0x10) = nextZ;
-        // Conservar la velocidad real del vehículo para que giren las ruedas, actúe la suspensión y el streaming prediga sectores
-        *reinterpret_cast<float*>(vehAddr + 0x68) = std::isfinite(ve.vx) ? ve.vx : 0.0f;
-        *reinterpret_cast<float*>(vehAddr + 0x6c) = std::isfinite(ve.vy) ? ve.vy : 0.0f;
-        *reinterpret_cast<float*>(vehAddr + 0x70) = std::isfinite(ve.vz) ? ve.vz : 0.0f;
+        // Conservar la velocidad real del vehículo para que CWorld::Process avance suavemente a 60fps
+        *reinterpret_cast<float*>(vehAddr + 0x68) = vx;
+        *reinterpret_cast<float*>(vehAddr + 0x6c) = vy;
+        *reinterpret_cast<float*>(vehAddr + 0x70) = vz;
+        if (isLocalOccupiedOrEntering) {
+            *reinterpret_cast<float*>(vehAddr + 0x74) = 0.0f;
+            *reinterpret_cast<float*>(vehAddr + 0x78) = 0.0f;
+            *reinterpret_cast<float*>(vehAddr + 0x7c) = 0.0f;
+        }
 
         if (gtaSymbols_.centityUpdateRwFrameFn) {
             gtaSymbols_.centityUpdateRwFrameFn(veh);
@@ -1546,17 +1606,25 @@ public:
                     }
                 }
             }
-            if (cutsceneSkipVotesMask_ != 0 && gtaSymbols_.ccutsceneMgrSkipCutsceneFn) {
-                uint8_t activeMask = 0x01;
-                for (int i = 1; i < kMaxCoopPlayers; ++i) {
-                    if (players_[i].isActive && players_[i].lastNetworkUpdateMs > 0) activeMask |= static_cast<uint8_t>(1U << i);
+            if (cutsceneSkipVotesMask_ != 0 && g_origCCutsceneMgrSkipCutscene) {
+                uint64_t nowCutMs = currentTimeMillis();
+                int localCutIdx = std::clamp(config_.localPlayerSlot, 1, kMaxCoopPlayers) - 1;
+                uint8_t activeMask = static_cast<uint8_t>(1U << localCutIdx);
+                for (int i = 0; i < kMaxCoopPlayers; ++i) {
+                    if (i != localCutIdx && players_[i].isActive && players_[i].lastNetworkUpdateMs > 0 &&
+                        (nowCutMs - players_[i].lastNetworkUpdateMs) < 15000) {
+                        activeMask |= static_cast<uint8_t>(1U << i);
+                    }
                 }
                 if ((cutsceneSkipVotesMask_ & activeMask) == activeMask) {
-                    gtaSymbols_.ccutsceneMgrSkipCutsceneFn();
+                    LOGI("All co-op players voted to skip cutscene (mask=0x%x)! Skipping simultaneously.", activeMask);
                     cutsceneSkipVotesMask_ = 0;
+                    g_origCCutsceneMgrSkipCutscene();
                 }
             }
             return;
+        } else if (cutsceneSkipVotesMask_ != 0) {
+            cutsceneSkipVotesMask_ = 0;
         }
 
         void* localPed = gtaSymbols_.findPlayerPedFn(-1);
@@ -1583,7 +1651,9 @@ public:
                 worldSyncVehDriverPtr_[v] = nullptr;
                 worldSyncVehDriverHandle_[v] = -1;
                 worldSyncVehHadDriver_[v] = false;
+                worldSyncVehSpawnedByUs_[v] = false;
             }
+            localRoofVehPtr_ = nullptr;
             return;
         }
 
@@ -1613,7 +1683,9 @@ public:
                 worldSyncVehDriverPtr_[v] = nullptr;
                 worldSyncVehDriverHandle_[v] = -1;
                 worldSyncVehHadDriver_[v] = false;
+                worldSyncVehSpawnedByUs_[v] = false;
             }
+            localRoofVehPtr_ = nullptr;
             LOGI("Local Player CJ detected in world: CPlayerPed=%p", localPed);
         }
 
@@ -1809,25 +1881,87 @@ public:
                     float dvx = *reinterpret_cast<float*>(pvMat + 0x30) - myPos.x;
                     float dvy = *reinterpret_cast<float*>(pvMat + 0x34) - myPos.y;
                     if ((dvx * dvx + dvy * dvy) < (9.5f * 9.5f)) {
-                        // Convertir la tarea de robo de conductor (701) en entrada nativa como pasajero (700) con animación real de puerta
-                        if (localIntel != 0 && gtaSymbols_.ctaskComplexEnterCarAsPassengerCtorFn &&
-                            gtaSymbols_.ctaskOperatorNewFn && gtaSymbols_.ctaskManagerSetTaskFn) {
-                            void* passTask = gtaSymbols_.ctaskOperatorNewFn(0x70);
-                            if (passTask) {
-                                gtaSymbols_.ctaskComplexEnterCarAsPassengerCtorFn(passTask, partnerVeh, 0, false);
-                                gtaSymbols_.ctaskManagerSetTaskFn(reinterpret_cast<void*>(localIntel + 0x08), passTask, 3, false);
-                                localEnteringAsDriver = false;
-                                localAlreadyEnteringAsPassenger = true;
-                                LOGI("Redirected localPed to CTaskComplexEnterCarAsPassenger (700) on partnerVeh=%p", partnerVeh);
+                        uintptr_t pvAddr = reinterpret_cast<uintptr_t>(partnerVeh);
+                        uint8_t numPass = *reinterpret_cast<uint8_t*>(pvAddr + 0x5e8);
+                        uint8_t maxPass = *reinterpret_cast<uint8_t*>(pvAddr + 0x5ec);
+                        bool hasFreePassengerSeat = (maxPass > 0 && numPass < maxPass);
+                        if (hasFreePassengerSeat) {
+                            // Convertir la tarea de robo de conductor (701) en entrada nativa como pasajero (700) con animación real de puerta
+                            if (localIntel != 0 && gtaSymbols_.ctaskComplexEnterCarAsPassengerCtorFn &&
+                                gtaSymbols_.ctaskOperatorNewFn && gtaSymbols_.ctaskManagerSetTaskFn) {
+                                void* passTask = gtaSymbols_.ctaskOperatorNewFn(0x70);
+                                if (passTask) {
+                                    gtaSymbols_.ctaskComplexEnterCarAsPassengerCtorFn(passTask, partnerVeh, 0, false);
+                                    gtaSymbols_.ctaskManagerSetTaskFn(reinterpret_cast<void*>(localIntel + 0x08), passTask, 3, false);
+                                    localEnteringAsDriver = false;
+                                    localAlreadyEnteringAsPassenger = true;
+                                    LOGI("Redirected localPed to CTaskComplexEnterCarAsPassenger (700) on partnerVeh=%p", partnerVeh);
+                                }
+                            } else {
+                                warpPedIntoVehiclePassenger(localPed, partnerVeh, 0, localPed, true);
+                                myVeh = partnerVeh;
                             }
                         } else {
-                            warpPedIntoVehiclePassenger(localPed, partnerVeh, 0, localPed, true);
-                            myVeh = partnerVeh;
+                            // No hay asiento libre en el vehículo (ej. bici, 1 plaza o lleno): subir al techo del vehículo del compañero
+                            if (localIntel != 0 && gtaSymbols_.ctaskManagerSetTaskFn) {
+                                gtaSymbols_.ctaskManagerSetTaskFn(reinterpret_cast<void*>(localIntel + 0x08), nullptr, 3, false);
+                            }
+                            localRoofVehPtr_ = partnerVeh;
+                            localRoofAttachTick_ = tickCount;
+                            me.isAttachedOnRoof = true;
+                            me.seatIndex = 4;
+                            me.vehicleNetId = players_[r].vehicleNetId;
+                            me.vehicleModelId = static_cast<int32_t>(*reinterpret_cast<int16_t*>(pvAddr + 0x32));
+                            localEnteringAsDriver = false;
+                            LOGI("Attached localPed onto roof of full partnerVeh=%p (numPass=%u, maxPass=%u)",
+                                 partnerVeh, static_cast<unsigned>(numPass), static_cast<unsigned>(maxPass));
                         }
                         break;
                     }
                 }
             }
+
+            // Mantener al jugador local sobre el techo si subió al techo de un vehículo lleno (salta o pulsa subir de nuevo para bajarse)
+            if (me.isAttachedOnRoof && localRoofVehPtr_ != nullptr) {
+                bool wantDetach = (me.isJumping != 0 && (tickCount - localRoofAttachTick_) > 20) ||
+                                  (localTryingToEnterCar && (tickCount - localRoofAttachTick_) > 25);
+                uintptr_t rvAddr = reinterpret_cast<uintptr_t>(localRoofVehPtr_);
+                uintptr_t rvMat = *reinterpret_cast<uintptr_t*>(rvAddr + 0x18);
+                if (wantDetach || rvMat == 0) {
+                    localRoofVehPtr_ = nullptr;
+                    me.isAttachedOnRoof = false;
+                    me.seatIndex = -1;
+                    me.vehicleNetId = 0;
+                    me.vehicleModelId = 0;
+                } else {
+                    float rx = *reinterpret_cast<float*>(rvMat + 0x30) + *reinterpret_cast<float*>(rvMat + 0x20) * 1.18f;
+                    float ry = *reinterpret_cast<float*>(rvMat + 0x34) + *reinterpret_cast<float*>(rvMat + 0x24) * 1.18f;
+                    float rz = *reinterpret_cast<float*>(rvMat + 0x38) + *reinterpret_cast<float*>(rvMat + 0x28) * 1.18f;
+                    float rvx = *reinterpret_cast<float*>(rvAddr + 0x68);
+                    float rvy = *reinterpret_cast<float*>(rvAddr + 0x6c);
+                    float rvz = *reinterpret_cast<float*>(rvAddr + 0x70);
+                    uintptr_t lMat = *reinterpret_cast<uintptr_t*>(localPedAddr + 0x18);
+                    if (lMat != 0) {
+                        *reinterpret_cast<float*>(lMat + 0x30) = rx;
+                        *reinterpret_cast<float*>(lMat + 0x34) = ry;
+                        *reinterpret_cast<float*>(lMat + 0x38) = rz;
+                    }
+                    *reinterpret_cast<float*>(localPedAddr + 0x08) = rx;
+                    *reinterpret_cast<float*>(localPedAddr + 0x0c) = ry;
+                    *reinterpret_cast<float*>(localPedAddr + 0x10) = rz;
+                    *reinterpret_cast<float*>(localPedAddr + 0x68) = rvx;
+                    *reinterpret_cast<float*>(localPedAddr + 0x6c) = rvy;
+                    *reinterpret_cast<float*>(localPedAddr + 0x70) = rvz;
+                    if (gtaSymbols_.centityUpdateRwFrameFn) {
+                        gtaSymbols_.centityUpdateRwFrameFn(localPed);
+                    }
+                    me.x = rx; me.y = ry; me.z = rz;
+                    me.vx = rvx; me.vy = rvy; me.vz = rvz;
+                }
+            }
+        } else if (me.isAttachedOnRoof) {
+            localRoofVehPtr_ = nullptr;
+            me.isAttachedOnRoof = false;
         }
 
         int32_t resolvedVehNetId = 0;
@@ -2663,6 +2797,7 @@ public:
                             std::swap(worldSyncVehDriverPtr_[v], worldSyncVehDriverPtr_[otherV]);
                             std::swap(worldSyncVehDriverHandle_[v], worldSyncVehDriverHandle_[otherV]);
                             std::swap(worldSyncVehHadDriver_[v], worldSyncVehHadDriver_[otherV]);
+                            std::swap(worldSyncVehSpawnedByUs_[v], worldSyncVehSpawnedByUs_[otherV]);
                             break;
                         }
                     }
@@ -2695,6 +2830,7 @@ public:
                             std::swap(worldSyncVehDriverPtr_[v], worldSyncVehDriverPtr_[freeV]);
                             std::swap(worldSyncVehDriverHandle_[v], worldSyncVehDriverHandle_[freeV]);
                             std::swap(worldSyncVehHadDriver_[v], worldSyncVehHadDriver_[freeV]);
+                            std::swap(worldSyncVehSpawnedByUs_[v], worldSyncVehSpawnedByUs_[freeV]);
                             movedTo = freeV;
                             break;
                         }
@@ -2716,13 +2852,14 @@ public:
                         uintptr_t wvMat = *reinterpret_cast<uintptr_t*>(reinterpret_cast<uintptr_t>(wVeh) + 0x18);
                         float vdx = wvMat ? (*reinterpret_cast<float*>(wvMat + 0x30) - me.x) : 999.0f;
                         float vdy = wvMat ? (*reinterpret_cast<float*>(wvMat + 0x34) - me.y) : 999.0f;
-                        if ((vdx * vdx + vdy * vdy) > (60.0f * 60.0f)) {
+                        // Jamás destruir/evictar vehículos de misión ni vehículos que no fueron creados por nuestro puente
+                        if (worldSyncVehSpawnedByUs_[v] && (vdx * vdx + vdy * vdy) > (60.0f * 60.0f)) {
                             if (worldSyncVehDriverPtr_[v] && gtaSymbols_.cpoolsGetPedFn && worldSyncVehDriverHandle_[v] > 0 &&
                                 gtaSymbols_.cpoolsGetPedFn(worldSyncVehDriverHandle_[v]) == worldSyncVehDriverPtr_[v]) {
                                 evictNpcPedFromWorld(worldSyncVehDriverPtr_[v], localPed);
                             }
                             evictVehicleFromWorld(wVeh, localPed);
-                        } else {
+                        } else if (worldSyncVehSpawnedByUs_[v]) {
                             // Si el vehículo sigue a la vista (< 60m), liberarlo al motor como RANDOM_VEHICLE sin desaparecerlo frente al jugador
                             *reinterpret_cast<uint8_t*>(reinterpret_cast<uintptr_t>(wVeh) + 0x610) = 1; // RANDOM_VEHICLE
                             if (worldSyncVehDriverPtr_[v] && gtaSymbols_.cpedSetCharCreatedByFn) {
@@ -2737,6 +2874,7 @@ public:
                         worldSyncVehDriverPtr_[v] = nullptr;
                         worldSyncVehDriverHandle_[v] = -1;
                         worldSyncVehHadDriver_[v] = false;
+                        worldSyncVehSpawnedByUs_[v] = false;
                     }
                     if (!validVehEntry) continue;
                 }
@@ -2744,7 +2882,8 @@ public:
                 if (!wVeh) {
                     if (!exactVehModelLoaded) continue;
                     // Primero verificar si ya existe en el mundo local un vehículo del MISMO modelo cerca (incluyendo myVeh)
-                    // y adoptarlo en lugar de spawnear un segundo vehículo encima que haría explotar al primero
+                    // y adoptarlo en lugar de spawnear un segundo vehículo encima que haría explotar al primero.
+                    // IMPORTANTE: jamás adoptar un MISSION_VEHICLE (+0x610 == 2) ajeno (como la BMX de la misión) para nunca alterarlo ni destruirlo.
                     if (gtaSymbols_.cpoolsVehiclePool) {
                         void* vPoolPtr = *reinterpret_cast<void**>(gtaSymbols_.cpoolsVehiclePool);
                         if (vPoolPtr) {
@@ -2767,6 +2906,8 @@ public:
                                     }
                                     if (alreadyManaged) continue;
                                     uintptr_t cvAddr = reinterpret_cast<uintptr_t>(candVeh);
+                                    uint8_t cvCreatedBy = *reinterpret_cast<uint8_t*>(cvAddr + 0x610);
+                                    if (cvCreatedBy == 2 && candVeh != myVeh) continue; // Proteger vehículos de misión (ej. BMX)
                                     int16_t cvModel = *reinterpret_cast<int16_t*>(cvAddr + 0x32);
                                     uintptr_t cvMat = *reinterpret_cast<uintptr_t*>(cvAddr + 0x18);
                                     if (cvMat != 0 && cvModel == ve.modelId) {
@@ -2780,7 +2921,6 @@ public:
                                     }
                                 }
                                 if (adoptableVeh != nullptr) {
-                                    *reinterpret_cast<uint8_t*>(reinterpret_cast<uintptr_t>(adoptableVeh) + 0x610) = 2; // MISSION_VEHICLE
                                     worldSyncVehPtr_[v] = adoptableVeh;
                                     worldSyncVehHandle_[v] = gtaSymbols_.cpoolsGetVehicleRefFn ? gtaSymbols_.cpoolsGetVehicleRefFn(adoptableVeh) : -1;
                                     worldSyncVehHostSlot_[v] = ve.hostPoolSlot;
@@ -2788,6 +2928,7 @@ public:
                                     worldSyncVehDriverPtr_[v] = nullptr;
                                     worldSyncVehDriverHandle_[v] = -1;
                                     worldSyncVehHadDriver_[v] = (adoptableVeh == myVeh);
+                                    worldSyncVehSpawnedByUs_[v] = false;
                                     wVeh = adoptableVeh;
                                 }
                             }
@@ -2795,13 +2936,19 @@ public:
                     }
 
                     if (!wVeh) {
-                        // Jamás spawnear un vehículo nuevo a menos de 8.5m de myVeh para evitar colisiones/explosiones
+                        // Evitar spawnear un vehículo nuevo encima de myVeh (margen más chico para bicis/motos)
                         if (myVeh != nullptr) {
                             uintptr_t myVMat = *reinterpret_cast<uintptr_t*>(reinterpret_cast<uintptr_t>(myVeh) + 0x18);
                             if (myVMat != 0) {
                                 float mdx = *reinterpret_cast<float*>(myVMat + 0x30) - ve.x;
                                 float mdy = *reinterpret_cast<float*>(myVMat + 0x34) - ve.y;
-                                if ((mdx * mdx + mdy * mdy) < (8.5f * 8.5f)) {
+                                bool isTwoWheeler = (ve.modelId == 481 || ve.modelId == 509 || ve.modelId == 510 ||
+                                                     ve.modelId == 448 || ve.modelId == 461 || ve.modelId == 462 ||
+                                                     ve.modelId == 463 || ve.modelId == 468 || ve.modelId == 471 ||
+                                                     ve.modelId == 521 || ve.modelId == 522 || ve.modelId == 523 ||
+                                                     ve.modelId == 581 || ve.modelId == 586);
+                                float minClearance = isTwoWheeler ? 1.8f : 4.5f;
+                                if ((mdx * mdx + mdy * mdy) < (minClearance * minClearance)) {
                                     continue;
                                 }
                             }
@@ -2826,6 +2973,7 @@ public:
                                 worldSyncVehDriverPtr_[v] = nullptr;
                                 worldSyncVehDriverHandle_[v] = -1;
                                 worldSyncVehHadDriver_[v] = false;
+                                worldSyncVehSpawnedByUs_[v] = true;
                                 wVeh = newVeh;
                             }
                         }
@@ -2926,8 +3074,8 @@ public:
                     // Si el vehículo es nuestro pero somos pasajeros (me.seatIndex > 0) o no estamos en él (ni robándolo),
                     // aplicar la posición sincronizada del Host/conductor sin relinkear CWorld si localPed está subiendo o viajando dentro
                     if ((wVeh != myVeh && !localCarjackingThisVeh) || me.seatIndex > 0) {
-                        bool isLocalInOrEntering = (wVeh == myVeh) || localEnteringThisAsPass;
-                        applySmoothVehicleTransform(wVeh, ve, isLocalInOrEntering);
+                        bool isLocalInOrEntering = (wVeh == myVeh) || localEnteringThisAsPass || (wVeh == localRoofVehPtr_);
+                        applySmoothVehicleTransform(wVeh, ve, isLocalInOrEntering, worldState_.lastNetworkUpdateMs);
                         if (wVeh == myVeh && me.seatIndex > 0 && gtaSymbols_.cpedSetPedPositionInCarFn) {
                             gtaSymbols_.cpedSetPedPositionInCarFn(localPed);
                         }
@@ -3241,7 +3389,13 @@ public:
                                 if (myVMat != 0) {
                                     float mdx = *reinterpret_cast<float*>(myVMat + 0x30) - targetRemX;
                                     float mdy = *reinterpret_cast<float*>(myVMat + 0x34) - targetRemY;
-                                    if ((mdx * mdx + mdy * mdy) < (8.0f * 8.0f)) tooCloseToMyVeh = true;
+                                    bool isTwoWheeler = (expectedVehModel == 481 || expectedVehModel == 509 || expectedVehModel == 510 ||
+                                                         expectedVehModel == 448 || expectedVehModel == 461 || expectedVehModel == 462 ||
+                                                         expectedVehModel == 463 || expectedVehModel == 468 || expectedVehModel == 471 ||
+                                                         expectedVehModel == 521 || expectedVehModel == 522 || expectedVehModel == 523 ||
+                                                         expectedVehModel == 581 || expectedVehModel == 586);
+                                    float minClear = isTwoWheeler ? 1.6f : 3.8f;
+                                    if ((mdx * mdx + mdy * mdy) < (minClear * minClear)) tooCloseToMyVeh = true;
                                 }
                             }
                             if (!tooCloseToMyVeh) {
@@ -3298,10 +3452,27 @@ public:
                                 remVe.damageDoorsHigh = rem.damageDoorsHigh;
                                 remVe.damageLights = rem.damageLights;
                                 remVe.damagePanels = rem.damagePanels;
-                                applySmoothVehicleTransform(targetVeh, remVe, targetVeh == myVeh);
+                                applySmoothVehicleTransform(targetVeh, remVe, targetVeh == myVeh || targetVeh == localRoofVehPtr_, rem.lastNetworkUpdateMs);
                                 if (targetVeh == myVeh && me.seatIndex > 0 && gtaSymbols_.cpedSetPedPositionInCarFn) {
                                     gtaSymbols_.cpedSetPedPositionInCarFn(localPed);
                                 }
+                            }
+                        } else if (rem.isAttachedOnRoof || rem.seatIndex >= 4) {
+                            // Compañero remoto subido en el techo del vehículo
+                            if (remCurrentlyInVeh) {
+                                warpPedOutOfVehicle(ped);
+                            }
+                            uintptr_t tvMat = *reinterpret_cast<uintptr_t*>(tvAddr + 0x18);
+                            if (tvMat != 0) {
+                                float rx = *reinterpret_cast<float*>(tvMat + 0x30) + *reinterpret_cast<float*>(tvMat + 0x20) * 1.18f;
+                                float ry = *reinterpret_cast<float*>(tvMat + 0x34) + *reinterpret_cast<float*>(tvMat + 0x24) * 1.18f;
+                                float rz = *reinterpret_cast<float*>(tvMat + 0x38) + *reinterpret_cast<float*>(tvMat + 0x28) * 1.18f;
+                                applySmoothPedTransformAndAnim(
+                                    ped, rx, ry, rz,
+                                    rem.vx, rem.vy, rem.vz, rem.heading,
+                                    1, 200.0f, rem.lastNetworkUpdateMs,
+                                    rem.isCrouching != 0
+                                );
                             }
                         } else {
                             // Compañero remoto como pasajero (o ambos en el mismo auto donde localPed es conductor)
@@ -3488,6 +3659,10 @@ public:
                         }
                         if (config_.isHost) {
                             ::sendto(sock, &worldPkt, sizeof(worldPkt), 0, reinterpret_cast<const sockaddr*>(&dest), sizeof(dest));
+                        }
+                        if ((gtaSymbols_.cutsceneRunning && *gtaSymbols_.cutsceneRunning != 0) || cutsceneSkipVotesMask_ != 0) {
+                            CutsceneSyncPacket csPkt = buildCutsceneSyncPacket(mySlot);
+                            ::sendto(sock, &csPkt, sizeof(csPkt), 0, reinterpret_cast<const sockaddr*>(&dest), sizeof(dest));
                         }
                     }
 
@@ -4444,6 +4619,34 @@ public:
 #endif
     }
 
+    void onCutsceneSkipRequested() {
+#if defined(__unix__) || defined(__ANDROID__) || defined(__linux__)
+        uint64_t nowMs = currentTimeMillis();
+        int localIdx = std::clamp(config_.localPlayerSlot, 1, kMaxCoopPlayers) - 1;
+        uint8_t myBit = static_cast<uint8_t>(1U << localIdx);
+        cutsceneSkipVotesMask_ |= myBit;
+
+        uint8_t activeMask = myBit;
+        for (int i = 0; i < kMaxCoopPlayers; ++i) {
+            if (i != localIdx && players_[i].isActive && players_[i].lastNetworkUpdateMs > 0 &&
+                (nowMs - players_[i].lastNetworkUpdateMs) < 15000) {
+                activeMask |= static_cast<uint8_t>(1U << i);
+            }
+        }
+        // Si todos los jugadores activos ya votaron (o estás solo), saltar cinemática de inmediato;
+        // si falta la aprobación del compañero, esperar a recibir su voto vía PKT_CUTSCENE_SYNC
+        if ((cutsceneSkipVotesMask_ & activeMask) == activeMask) {
+            cutsceneSkipVotesMask_ = 0;
+            if (g_origCCutsceneMgrSkipCutscene) {
+                g_origCCutsceneMgrSkipCutscene();
+            }
+        } else {
+            LOGI("Player P%d voted to skip cutscene (votes=0x%x / needed=0x%x); waiting for partner approval.",
+                 localIdx + 1, cutsceneSkipVotesMask_, activeMask);
+        }
+#endif
+    }
+
 private:
     CoopEngineBridge() {
         selfInstanceId_ = static_cast<uint16_t>(
@@ -4872,6 +5075,9 @@ private:
     void* worldSyncVehDriverPtr_[kMaxSyncedWorldVehicles] = {nullptr};
     int worldSyncVehDriverHandle_[kMaxSyncedWorldVehicles] = {-1, -1, -1, -1, -1};
     bool worldSyncVehHadDriver_[kMaxSyncedWorldVehicles] = {false};
+    bool worldSyncVehSpawnedByUs_[kMaxSyncedWorldVehicles] = {false};
+    void* localRoofVehPtr_ = nullptr;
+    int64_t localRoofAttachTick_ = 0;
 
 #if defined(__unix__) || defined(__ANDROID__) || defined(__linux__)
     std::vector<PeerEndpoint> activePeers_;
@@ -4938,6 +5144,10 @@ static bool Hooked_CPlayerPed_CanPlayerStartMission(void* selfPlayerPed) {
         : true;
     if (!orig) return false;
     return CoopEngineBridge::instance().canStartMissionTogether();
+}
+
+static void Hooked_CCutsceneMgr_SkipCutscene() {
+    CoopEngineBridge::instance().onCutsceneSkipRequested();
 }
 
 } // namespace coopandreas
