@@ -2357,9 +2357,7 @@ public:
                 me.y = targetY;
                 me.z = targetZ;
                 initialAlleyFreeRoamDone_ = true;
-                if (config_.isHost) {
-                    initialSyncTeleportDone_ = true;
-                }
+                initialSyncTeleportDone_ = config_.isHost;
                 LOGI("Positioned %s CJ in open alley courtyard at (%.1f, %.1f, %.1f) facing +X!",
                      config_.isHost ? "HOST" : "GUEST", targetX, targetY, targetZ);
             }
@@ -3807,6 +3805,13 @@ public:
 
                     sendRawUdpPacket(sock, subnetBroadcastStr, config_.udpCoopPort, &hs, sizeof(hs));
                     sendRawUdpPacket(sock, subnetBroadcastStr, config_.udpCoopPort, &pedPkt, sizeof(pedPkt));
+                    if ((gtaSymbols_.cutsceneRunning && *gtaSymbols_.cutsceneRunning != 0) || cutsceneSkipVotesMask_ != 0) {
+                        CutsceneSyncPacket csPkt = buildCutsceneSyncPacket(mySlot);
+                        sendRawUdpPacket(sock, subnetBroadcastStr, config_.udpCoopPort, &csPkt, sizeof(csPkt));
+                        if (subnetBroadcastStr != "255.255.255.255") {
+                            sendRawUdpPacket(sock, "255.255.255.255", config_.udpCoopPort, &csPkt, sizeof(csPkt));
+                        }
+                    }
                     if (subnetBroadcastStr != "255.255.255.255") {
                         sendRawUdpPacket(sock, "255.255.255.255", config_.udpCoopPort, &hs, sizeof(hs));
                         sendRawUdpPacket(sock, "255.255.255.255", config_.udpCoopPort, &pedPkt, sizeof(pedPkt));
@@ -4930,8 +4935,11 @@ private:
         for (int i = 0; i < kMaxCoopPlayers; ++i) {
             int32_t reqSkin = players_[i].skinModelId;
             int32_t safeSkin = resolveSafePedModelId(reqSkin);
-            int loaded = (safeSkin > 0 && gtaSymbols_.isModelLoaded(safeSkin)) ? 1 : (safeSkin == 0 ? 1 : 0);
             int spawnedOrLocalModel = (i + 1 == config_.localPlayerSlot) ? localAppliedSkinModel_ : remotePedSpawnedModel_[i];
+            bool specialLoaded = (spawnedOrLocalModel >= 290 && spawnedOrLocalModel <= 299 &&
+                                  gtaSymbols_.cstreamingHasSpecialCharLoadedFn &&
+                                  gtaSymbols_.cstreamingHasSpecialCharLoadedFn(spawnedOrLocalModel - 290));
+            int loaded = (specialLoaded || (safeSkin > 0 && gtaSymbols_.isModelLoaded(safeSkin)) || safeSkin == 0) ? 1 : 0;
             fprintf(logf, "Slot P%d: active=%d | reqSkinModelId=%d | safePedModelId=%d | isModelLoaded=%d | remotePedSpawnedModel=%d | wep=%d | pedPtr=%p | pos=(%.1f, %.1f, %.1f)\n",
                     i + 1, players_[i].isActive ? 1 : 0, reqSkin, safeSkin, loaded,
                     spawnedOrLocalModel, players_[i].weaponId, remotePedPtr_[i], players_[i].x, players_[i].y, players_[i].z);
