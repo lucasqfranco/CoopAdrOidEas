@@ -485,6 +485,10 @@ struct GtaSaNativeSymbols {
     using FnCPlayerPedCanPlayerStartMission = bool (*)(void* selfPlayerPed);
     using FnCTaskSimpleGangDriveByCtor = void* (*)(void* self, void* pTargetEntity, const CVector* pTargetPos, float fAbortRange, int8_t nFrequencyPercentage, int8_t nDrivebyStyle, bool bSeatRHS);
     using FnCCutsceneMgrIsSkipPressed = bool (*)();
+    using FnCTouchInterfaceIsTouched = bool (*)(int widgetId, CVector2D* pVecOut, int nEnableWidget);
+    using FnCTouchInterfaceIsHeldDown = bool (*)(int widgetId, int nEnableWidget);
+    using FnCPedAddWeaponModel = void (*)(void* selfPed, int modelIndex);
+    using FnCPedSetCurrentWeaponSlot = void (*)(void* selfPed, int slotIndex);
 
     FnCStreamingRequestSpecialChar cstreamingRequestSpecialCharFn = nullptr;
     FnCStreamingHasSpecialCharLoaded cstreamingHasSpecialCharLoadedFn = nullptr;
@@ -507,6 +511,10 @@ struct GtaSaNativeSymbols {
     FnCPlayerPedCanPlayerStartMission cplayerPedCanPlayerStartMissionFn = nullptr;
     FnCTaskSimpleGangDriveByCtor ctaskSimpleGangDriveByCtorFn = nullptr;
     FnCCutsceneMgrIsSkipPressed ccutsceneMgrIsSkipPressedFn = nullptr;
+    FnCTouchInterfaceIsTouched ctouchInterfaceIsTouchedFn = nullptr;
+    FnCTouchInterfaceIsHeldDown ctouchInterfaceIsHeldDownFn = nullptr;
+    FnCPedAddWeaponModel cpedAddWeaponModelFn = nullptr;
+    FnCPedSetCurrentWeaponSlot cpedSetCurrentWeaponSlotFn = nullptr;
     int32_t* scriptParams = nullptr;                // ScriptParams
     void* canimManagerAssocGroups = nullptr;        // _ZN12CAnimManager19ms_aAnimAssocGroupsE
     void* canimManagerAnimBlocks = nullptr;         // _ZN12CAnimManager14ms_aAnimBlocksE
@@ -648,6 +656,10 @@ struct GtaSaNativeSymbols {
         cplayerPedCanPlayerStartMissionFn = reinterpret_cast<FnCPlayerPedCanPlayerStartMission>(dlsym(libHandle, "_ZN10CPlayerPed21CanPlayerStartMissionEv"));
         ctaskSimpleGangDriveByCtorFn = reinterpret_cast<FnCTaskSimpleGangDriveByCtor>(dlsym(libHandle, "_ZN22CTaskSimpleGangDriveByC1EP7CEntityPK7CVectorfaab"));
         ccutsceneMgrIsSkipPressedFn = reinterpret_cast<FnCCutsceneMgrIsSkipPressed>(dlsym(libHandle, "_ZN12CCutsceneMgr32IsCutsceneSkipButtonBeingPressedEv"));
+        ctouchInterfaceIsTouchedFn = reinterpret_cast<FnCTouchInterfaceIsTouched>(dlsym(libHandle, "_ZN15CTouchInterface9IsTouchedENS_9WidgetIDsEP9CVector2Di"));
+        ctouchInterfaceIsHeldDownFn = reinterpret_cast<FnCTouchInterfaceIsHeldDown>(dlsym(libHandle, "_ZN15CTouchInterface10IsHeldDownENS_9WidgetIDsEi"));
+        cpedAddWeaponModelFn = reinterpret_cast<FnCPedAddWeaponModel>(dlsym(libHandle, "_ZN4CPed14AddWeaponModelEi"));
+        cpedSetCurrentWeaponSlotFn = reinterpret_cast<FnCPedSetCurrentWeaponSlot>(dlsym(libHandle, "_ZN4CPed16SetCurrentWeaponEi"));
         scriptParams = reinterpret_cast<int32_t*>(dlsym(libHandle, "ScriptParams"));
         canimManagerAssocGroups = dlsym(libHandle, "_ZN12CAnimManager19ms_aAnimAssocGroupsE");
         canimManagerAnimBlocks = dlsym(libHandle, "_ZN12CAnimManager14ms_aAnimBlocksE");
@@ -1916,22 +1928,53 @@ public:
                                          pvModel == 581 || pvModel == 586);
                         uint8_t numPass = *reinterpret_cast<uint8_t*>(pvAddr + 0x5e8);
                         uint8_t maxPass = *reinterpret_cast<uint8_t*>(pvAddr + 0x5ec);
-                        bool hasFreePassengerSeat = (maxPass > 0 && numPass < maxPass);
+                        int freePassSlot = -1;
+                        if (maxPass > 0) {
+                            int slotLimit = std::min<int>(static_cast<int>(maxPass), 3);
+                            for (int s = 0; s < slotLimit; ++s) {
+                                void* occ = *reinterpret_cast<void**>(pvAddr + 0x5a8 + static_cast<size_t>(s) * 8);
+                                if (occ == nullptr || occ == localPed) {
+                                    freePassSlot = s;
+                                    break;
+                                }
+                            }
+                        }
+                        bool hasFreePassengerSeat = (freePassSlot >= 0);
                         if (hasFreePassengerSeat) {
-                            // Convertir la tarea de robo de conductor (701) en entrada nativa como pasajero (700) con animación real de puerta
-                            if (localIntel != 0 && gtaSymbols_.ctaskComplexEnterCarAsPassengerCtorFn &&
-                                gtaSymbols_.ctaskOperatorNewFn && gtaSymbols_.ctaskManagerSetTaskFn) {
+                            float distToPartnerVehSq = dvx * dvx + dvy * dvy;
+                            int targetDoor = gtaSymbols_.ccarEnterExitComputePassengerDoorFn
+                                ? gtaSymbols_.ccarEnterExitComputePassengerDoorFn(partnerVeh, freePassSlot)
+                                : ((freePassSlot == 0) ? 8 : ((freePassSlot == 1) ? 11 : 9));
+                            if (targetDoor <= 0) {
+                                targetDoor = (freePassSlot == 0) ? 8 : ((freePassSlot == 1) ? 11 : 9);
+                            }
+                            float pvx = *reinterpret_cast<float*>(pvAddr + 0x68);
+                            float pvy = *reinterpret_cast<float*>(pvAddr + 0x6c);
+                            bool partnerCarMoving = (pvx * pvx + pvy * pvy) > (0.04f * 0.04f);
+                            // Si estamos cerca (< 6.0m) o el auto del compañero está en movimiento por red, sentar directo como pasajero
+                            // para que jamás aborte CTaskComplexGoToCarDoorAndStandStill ni intente bajar al conductor
+                            if (distToPartnerVehSq < (6.0f * 6.0f) || partnerCarMoving ||
+                                !gtaSymbols_.ctaskComplexEnterCarAsPassengerCtorFn ||
+                                !gtaSymbols_.ctaskOperatorNewFn || !gtaSymbols_.ctaskManagerSetTaskFn) {
+                                if (localIntel != 0 && gtaSymbols_.ctaskManagerSetTaskFn) {
+                                    gtaSymbols_.ctaskManagerSetTaskFn(reinterpret_cast<void*>(localIntel + 0x08), nullptr, 3, false);
+                                }
+                                warpPedIntoVehiclePassenger(localPed, partnerVeh, freePassSlot, localPed, true);
+                                myVeh = partnerVeh;
+                                localEnteringAsDriver = false;
+                                localAlreadyEnteringAsPassenger = false;
+                                LOGI("Seated localPed directly as passenger slot=%d (door=%d) in partnerVeh=%p",
+                                     freePassSlot, targetDoor, partnerVeh);
+                            } else if (localIntel != 0) {
                                 void* passTask = gtaSymbols_.ctaskOperatorNewFn(0x70);
                                 if (passTask) {
-                                    gtaSymbols_.ctaskComplexEnterCarAsPassengerCtorFn(passTask, partnerVeh, 0, false);
+                                    gtaSymbols_.ctaskComplexEnterCarAsPassengerCtorFn(passTask, partnerVeh, targetDoor, false);
                                     gtaSymbols_.ctaskManagerSetTaskFn(reinterpret_cast<void*>(localIntel + 0x08), passTask, 3, false);
                                     localEnteringAsDriver = false;
                                     localAlreadyEnteringAsPassenger = true;
-                                    LOGI("Redirected localPed to CTaskComplexEnterCarAsPassenger (700) on partnerVeh=%p", partnerVeh);
+                                    LOGI("Redirected localPed to CTaskComplexEnterCarAsPassenger (700) slot=%d door=%d on partnerVeh=%p",
+                                         freePassSlot, targetDoor, partnerVeh);
                                 }
-                            } else {
-                                warpPedIntoVehiclePassenger(localPed, partnerVeh, 0, localPed, true);
-                                myVeh = partnerVeh;
                             }
                         } else if (!pvIsBike) {
                             // No hay asiento libre en un vehículo de 4 ruedas (1 plaza o lleno): subir al techo del vehículo del compañero
@@ -2018,7 +2061,18 @@ public:
         if (myVeh) {
             uintptr_t myVehAddr = reinterpret_cast<uintptr_t>(myVeh);
             void* curDrv = *reinterpret_cast<void**>(myVehAddr + 0x5a0);
-            me.seatIndex = (curDrv == localPed) ? 0 : 1;
+            if (curDrv == localPed) {
+                me.seatIndex = 0;
+            } else {
+                int foundPassSlot = 0;
+                for (int s = 0; s < 3; ++s) {
+                    if (*reinterpret_cast<void**>(myVehAddr + 0x5a8 + static_cast<size_t>(s) * 8) == localPed) {
+                        foundPassSlot = s;
+                        break;
+                    }
+                }
+                me.seatIndex = static_cast<int8_t>(foundPassSlot + 1);
+            }
             me.isAttachedOnRoof = false;
             me.vehicleModelId = static_cast<int32_t>(*reinterpret_cast<int16_t*>(myVehAddr + 0x32));
             me.vehicleHealth = *reinterpret_cast<float*>(myVehAddr + 0x634);
@@ -2044,27 +2098,117 @@ public:
                     }
                 }
             }
+            if (resolvedVehNetId == 0 && me.seatIndex > 0) {
+                for (int r = 0; r < kMaxCoopPlayers; ++r) {
+                    if (r != localIdx && players_[r].isActive && players_[r].seatIndex == 0 &&
+                        players_[r].vehicleModelId == me.vehicleModelId && players_[r].vehicleNetId > 0) {
+                        resolvedVehNetId = players_[r].vehicleNetId;
+                        break;
+                    }
+                }
+            }
             if (resolvedVehNetId == 0) resolvedVehNetId = 101;
 
-            // Habilitar disparo real desde la ventana (Drive-By 360°) para el pasajero si lleva arma de fuego (22..34)
-            if (me.seatIndex > 0 && me.weaponId >= 22 && me.weaponId <= 34) {
-                uintptr_t localIntel = *reinterpret_cast<uintptr_t*>(localPedAddr + 0x538);
-                if (localIntel != 0) {
-                    void* secAttackTask = *reinterpret_cast<void**>(localIntel + 0x30); // m_aSecondaryTasks[0] = TASK_SECONDARY_ATTACK
-                    if (secAttackTask == nullptr &&
-                        gtaSymbols_.ctaskOperatorNewFn &&
-                        gtaSymbols_.ctaskSimpleGangDriveByCtorFn &&
-                        gtaSymbols_.ctaskManagerSetTaskSecondaryFn) {
-                        void* dbTask = gtaSymbols_.ctaskOperatorNewFn(0x60);
-                        if (dbTask) {
-                            bool seatRHS = (me.seatIndex == 1 || me.seatIndex == 3);
-                            gtaSymbols_.ctaskSimpleGangDriveByCtorFn(dbTask, nullptr, nullptr, 1000.0f, 100, 8, seatRHS);
-                            gtaSymbols_.ctaskManagerSetTaskSecondaryFn(reinterpret_cast<void*>(localIntel + 0x08), dbTask, 0);
-                            LOGI("Enabled Passenger Drive-By (CTaskSimpleGangDriveBy) on localPed=%p seat=%d wep=%d",
-                                 localPed, me.seatIndex, me.weaponId);
+            // Habilitar disparo real desde la ventana (Drive-By 360° manual + estilo IA) para el acompañante (me.seatIndex > 0).
+            // Al entrar como pasajero, CTaskSimpleCarSetPedInAsPassenger::ProcessPed (0x610d14) llama a RemoveWeaponWhenEnteringVehicle(0)
+            // que des equipa el arma activa a slot 0 (puño); aquí restauramos automáticamente su subfusil/arma de fuego en mano.
+            if (me.seatIndex > 0) {
+                if (me.weaponId < 22 || me.weaponId > 34) {
+                    int bestSlot = -1;
+                    int32_t bestWepType = 0;
+                    // Priorizar slot 4 (Micro Uzi 28, MP5 29, Tec-9 32), luego pistolas (slot 2), rifles (slot 5) y escopetas (slot 3)
+                    const int slotOrder[5] = {4, 2, 5, 3, 6};
+                    for (int idx = 0; idx < 5; ++idx) {
+                        int s = slotOrder[idx];
+                        uintptr_t wepEntry = localPedAddr + 0x730 + static_cast<size_t>(s) * 0x20;
+                        int32_t wType = *reinterpret_cast<int32_t*>(wepEntry + 0x00);
+                        uint32_t wTotal = *reinterpret_cast<uint32_t*>(wepEntry + 0x0c);
+                        if (wType >= 22 && wType <= 34 && wTotal > 0) {
+                            bestSlot = s;
+                            bestWepType = wType;
+                            break;
                         }
                     }
-                    me.isDriveByActive = (*reinterpret_cast<void**>(localIntel + 0x30) != nullptr);
+                    // Si el pasajero no tiene ningún arma con balas, equiparle una Micro Uzi (28) de respaldo
+                    if (bestSlot < 0 && gtaSymbols_.cweaponInfoGetWeaponInfoFn && gtaSymbols_.cpedGiveWeaponFn) {
+                        void* uziInfo = gtaSymbols_.cweaponInfoGetWeaponInfoFn(28, 1);
+                        int32_t uziModel = uziInfo ? *reinterpret_cast<int32_t*>(reinterpret_cast<uintptr_t>(uziInfo) + 0x0c) : 352;
+                        if (uziModel > 0 && !gtaSymbols_.isModelLoaded(uziModel)) {
+                            if ((tickCount % 5 == 0) && gtaSymbols_.cstreamingRequestModelFn) {
+                                gtaSymbols_.cstreamingRequestModelFn(uziModel, 2);
+                            }
+                        } else {
+                            gtaSymbols_.cpedGiveWeaponFn(localPed, 28, 500, true);
+                            bestSlot = 4;
+                            bestWepType = 28;
+                        }
+                    }
+                    if (bestSlot >= 0 && bestWepType >= 22) {
+                        if (gtaSymbols_.cpedSetCurrentWeaponSlotFn) {
+                            gtaSymbols_.cpedSetCurrentWeaponSlotFn(localPed, bestSlot);
+                        } else if (gtaSymbols_.cpedSetCurrentWeaponFn) {
+                            gtaSymbols_.cpedSetCurrentWeaponFn(localPed, bestWepType);
+                        }
+                        *reinterpret_cast<uint8_t*>(localPedAddr + 0x8dc) = static_cast<uint8_t>(bestSlot);
+                        if (*reinterpret_cast<void**>(localPedAddr + 0x650) == nullptr &&
+                            gtaSymbols_.cweaponInfoGetWeaponInfoFn && gtaSymbols_.cpedAddWeaponModelFn) {
+                            void* wInfo = gtaSymbols_.cweaponInfoGetWeaponInfoFn(bestWepType, 1);
+                            int32_t wModel = wInfo ? *reinterpret_cast<int32_t*>(reinterpret_cast<uintptr_t>(wInfo) + 0x0c) : 0;
+                            if (wModel > 0 && gtaSymbols_.isModelLoaded(wModel)) {
+                                gtaSymbols_.cpedAddWeaponModelFn(localPed, wModel);
+                            }
+                        }
+                        me.weaponId = bestWepType;
+                    }
+                }
+
+                if (me.weaponId >= 22 && me.weaponId <= 34) {
+                    uintptr_t localIntel = *reinterpret_cast<uintptr_t*>(localPedAddr + 0x538);
+                    if (localIntel != 0) {
+                        void* secAttackTask = *reinterpret_cast<void**>(localIntel + 0x30); // m_aSecondaryTasks[0] = TASK_SECONDARY_ATTACK
+                        if (secAttackTask == nullptr &&
+                            gtaSymbols_.ctaskOperatorNewFn &&
+                            gtaSymbols_.ctaskSimpleGangDriveByCtorFn &&
+                            gtaSymbols_.ctaskManagerSetTaskSecondaryFn) {
+                            void* dbTask = gtaSymbols_.ctaskOperatorNewFn(0x60);
+                            if (dbTask) {
+                                bool seatRHS = (me.seatIndex == 1 || me.seatIndex == 3);
+                                gtaSymbols_.ctaskSimpleGangDriveByCtorFn(dbTask, nullptr, nullptr, 1000.0f, 100, 8, seatRHS);
+                                gtaSymbols_.ctaskManagerSetTaskSecondaryFn(reinterpret_cast<void*>(localIntel + 0x08), dbTask, 0);
+                                secAttackTask = *reinterpret_cast<void**>(localIntel + 0x30);
+                                LOGI("Enabled Passenger Drive-By (CTaskSimpleGangDriveBy) on localPed=%p seat=%d wep=%d",
+                                     localPed, me.seatIndex, me.weaponId);
+                            }
+                        }
+                        // Mantener activo el flag de targeting en vehículo (m_nPlayerFlags |= 8 en CPlayerPedData + 0x48)
+                        // y habilitar los botones táctiles de disparo en el HUD móvil (WIDGET_ATTACK=0, SHOOT_LEFT=10, SHOOT_RIGHT=11)
+                        uintptr_t playerData = *reinterpret_cast<uintptr_t*>(localPedAddr + 0x540);
+                        if (playerData != 0) {
+                            *reinterpret_cast<uint16_t*>(playerData + 0x48) |= 0x08u;
+                        }
+                        bool manualFirePressed = false;
+                        if (gtaSymbols_.ctouchInterfaceIsHeldDownFn) {
+                            if (gtaSymbols_.ctouchInterfaceIsHeldDownFn(0 /*WIDGET_ATTACK*/, 1)) manualFirePressed = true;
+                            if (gtaSymbols_.ctouchInterfaceIsHeldDownFn(10 /*WIDGET_VEHICLE_SHOOT_LEFT*/, 1)) manualFirePressed = true;
+                            if (gtaSymbols_.ctouchInterfaceIsHeldDownFn(11 /*WIDGET_VEHICLE_SHOOT_RIGHT*/, 1)) manualFirePressed = true;
+                        } else if (gtaSymbols_.ctouchInterfaceIsTouchedFn) {
+                            if (gtaSymbols_.ctouchInterfaceIsTouchedFn(0 /*WIDGET_ATTACK*/, nullptr, 1)) manualFirePressed = true;
+                        }
+                        if (secAttackTask != nullptr && manualFirePressed) {
+                            uintptr_t dbAddr = reinterpret_cast<uintptr_t>(secAttackTask);
+                            // Forzar sub-estado de disparo (m_nSubTaskState = 2 en +0x17) y cooldown = 0 (+0x1e) al mantener presionado el botón
+                            int8_t curSubState = *reinterpret_cast<int8_t*>(dbAddr + 0x17);
+                            if (curSubState <= 2) {
+                                *reinterpret_cast<int8_t*>(dbAddr + 0x17) = 2;
+                                *reinterpret_cast<int16_t*>(dbAddr + 0x1e) = 0;
+                            }
+                            me.animGroupId |= 0x06u;
+                            me.isAiming = 1u;
+                        }
+                        me.isDriveByActive = (secAttackTask != nullptr);
+                    }
+                } else {
+                    me.isDriveByActive = false;
                 }
             } else {
                 me.isDriveByActive = false;
@@ -3158,10 +3302,19 @@ public:
                     if (wVeh != myVeh) {
                         bool remDrivingThisVeh = false;
                         for (int r = 0; r < kMaxCoopPlayers; ++r) {
-                            if (r != localIdx && players_[r].isActive && players_[r].seatIndex == 0 &&
-                                players_[r].vehicleNetId == (1000 + ve.hostPoolSlot)) {
-                                remDrivingThisVeh = true;
-                                break;
+                            if (r != localIdx && players_[r].isActive && players_[r].seatIndex == 0) {
+                                if (players_[r].vehicleNetId == (1000 + ve.hostPoolSlot)) {
+                                    remDrivingThisVeh = true;
+                                    break;
+                                }
+                                if (players_[r].vehicleModelId == ve.modelId) {
+                                    float rdx = players_[r].x - wvx;
+                                    float rdy = players_[r].y - wvy;
+                                    if ((rdx * rdx + rdy * rdy) < (12.0f * 12.0f)) {
+                                        remDrivingThisVeh = true;
+                                        break;
+                                    }
+                                }
                             }
                         }
                         void* curDrv = *reinterpret_cast<void**>(wVehAddr + 0x5a0);
@@ -3416,9 +3569,12 @@ public:
                     }
                 }
 
-                // Sincronizar arma equipada en la mano 3D del compañero remoto y sus animaciones de combate/disparo
-                if (!remCurrentlyInVeh) {
+                // Sincronizar arma equipada en la mano 3D del compañero remoto (tanto a pie como asomado por la ventana como pasajero)
+                if (!remCurrentlyInVeh || rem.seatIndex > 0) {
                     int32_t desiredWep = std::clamp(rem.weaponId, 0, 46);
+                    if (rem.seatIndex > 0 && rem.isDriveByActive && (desiredWep < 22 || desiredWep > 34)) {
+                        desiredWep = 28; // Micro Uzi por defecto si el pasajero está en modo Drive-By
+                    }
                     if (remotePedEquippedWeapon_[i] != desiredWep) {
                         if (desiredWep == 0) {
                             if (gtaSymbols_.cpedSetCurrentWeaponFn) {
@@ -3435,6 +3591,10 @@ public:
                             } else {
                                 gtaSymbols_.cpedGiveWeaponFn(ped, desiredWep, 9999, true);
                                 gtaSymbols_.cpedSetCurrentWeaponFn(ped, desiredWep);
+                                if (wepModelId > 0 && *reinterpret_cast<void**>(remPedAddr + 0x650) == nullptr &&
+                                    gtaSymbols_.cpedAddWeaponModelFn) {
+                                    gtaSymbols_.cpedAddWeaponModelFn(ped, wepModelId);
+                                }
                                 remotePedEquippedWeapon_[i] = desiredWep;
                             }
                         }
@@ -3517,7 +3677,8 @@ public:
                             float vy = myVehMat ? *reinterpret_cast<float*>(myVehMat + 0x34) : me.y;
                             float dx = vx - targetRemX;
                             float dy = vy - targetRemY;
-                            if ((dx * dx + dy * dy) < (16.0f * 16.0f)) {
+                            if ((dx * dx + dy * dy) < (25.0f * 25.0f) ||
+                                (rem.vehicleNetId > 0 && rem.vehicleNetId == me.vehicleNetId)) {
                                 targetVeh = myVeh;
                             }
                         }
@@ -3676,12 +3837,41 @@ public:
                             }
                         } else {
                             // Compañero remoto como pasajero (o ambos en el mismo auto donde localPed es conductor)
-                            int seatSlot = (rem.seatIndex > 0) ? (rem.seatIndex - 1) : 0;
-                            if (!remCurrentlyInVeh || remCurrentVeh != targetVeh) {
+                            int seatSlot = std::clamp<int>((rem.seatIndex > 0) ? (rem.seatIndex - 1) : 0, 0, 2);
+                            void* curSeatPed = *reinterpret_cast<void**>(tvAddr + 0x5a8 + static_cast<size_t>(seatSlot) * 8);
+                            if (!remCurrentlyInVeh || remCurrentVeh != targetVeh || curSeatPed != ped) {
                                 if (remCurrentlyInVeh && remCurrentVeh != targetVeh) {
                                     warpPedOutOfVehicle(ped);
                                 }
                                 warpPedIntoVehiclePassenger(ped, targetVeh, seatSlot, localPed, true);
+                            }
+                            if (gtaSymbols_.cpedSetPedPositionInCarFn) {
+                                gtaSymbols_.cpedSetPedPositionInCarFn(ped);
+                            }
+                            // Activar CTaskSimpleGangDriveBy en el CCivilianPed remoto para que en la pantalla del conductor
+                            // el acompañante también saque medio cuerpo por la ventanilla y dispare como la IA
+                            uintptr_t remIntel = *reinterpret_cast<uintptr_t*>(remPedAddr + 0x538);
+                            if (remIntel != 0 && (rem.isDriveByActive || (rem.weaponId >= 22 && rem.weaponId <= 34))) {
+                                void* remSecTask = *reinterpret_cast<void**>(remIntel + 0x30);
+                                if (remSecTask == nullptr &&
+                                    gtaSymbols_.ctaskOperatorNewFn &&
+                                    gtaSymbols_.ctaskSimpleGangDriveByCtorFn &&
+                                    gtaSymbols_.ctaskManagerSetTaskSecondaryFn) {
+                                    void* dbTask = gtaSymbols_.ctaskOperatorNewFn(0x60);
+                                    if (dbTask) {
+                                        bool seatRHS = (seatSlot == 0 || seatSlot == 2);
+                                        gtaSymbols_.ctaskSimpleGangDriveByCtorFn(dbTask, nullptr, nullptr, 1000.0f, 100, 8, seatRHS);
+                                        gtaSymbols_.ctaskManagerSetTaskSecondaryFn(reinterpret_cast<void*>(remIntel + 0x08), dbTask, 0);
+                                        remSecTask = *reinterpret_cast<void**>(remIntel + 0x30);
+                                    }
+                                }
+                                if (remSecTask != nullptr && ((rem.animGroupId & 0x06u) != 0 || rem.isAiming != 0)) {
+                                    uintptr_t rdbAddr = reinterpret_cast<uintptr_t>(remSecTask);
+                                    if (*reinterpret_cast<int8_t*>(rdbAddr + 0x17) <= 2) {
+                                        *reinterpret_cast<int8_t*>(rdbAddr + 0x17) = 2;
+                                        *reinterpret_cast<int16_t*>(rdbAddr + 0x1e) = 0;
+                                    }
+                                }
                             }
                         }
                     } else {

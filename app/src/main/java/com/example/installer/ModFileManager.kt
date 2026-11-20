@@ -558,7 +558,13 @@ class ModFileManager(private val context: Context) {
                     }
                 } else {
                     if (file.name.equals("GTASAsf8.b", ignoreCase = true)) {
-                        try { File(filesDir, "GTASAsf8.b").let { if (it.exists() && it.length() < 50_000L) it.delete() } } catch (_: Exception) {}
+                        if (file.length() >= 180_000L) {
+                            forceCopyFile(file, File(filesDir, "GTASAsf1.b"))
+                            forceCopyFile(file, File(filesDir, "GTASAsf8.b"))
+                            copiedCount++
+                        } else {
+                            try { File(filesDir, "GTASAsf8.b").let { if (it.exists() && it.length() < 50_000L) it.delete() } } catch (_: Exception) {}
+                        }
                         try { File(cleoDir, "GTASAsf8.b").let { if (it.exists()) it.delete() } } catch (_: Exception) {}
                         return@forEach
                     }
@@ -1337,13 +1343,11 @@ class ModFileManager(private val context: Context) {
         try {
             val gtaFilesDir = File("/storage/emulated/0/Android_unprotected/data/com.rockstargames.gtasa/files")
             try { File(gtaFilesDir, "GTASAsf10.b").let { if (it.exists()) it.delete() } } catch (_: Exception) {}
-            val realSave = listOf("GTASAsf1.b", "GTASAsf2.b", "GTASAsf3.b", "GTASAsf9.b")
-                .map { File(gtaFilesDir, it) }
-                .firstOrNull { it.exists() && it.length() > 100_000L }
-            if (realSave != null) {
-                realSave.inputStream().use { input ->
-                    FileOutputStream(target).use { out -> input.copyTo(out) }
-                }
+            try { File("/storage/emulated/0/Android/data/com.rockstargames.gtasa/files/GTASAsf10.b").let { if (it.exists()) it.delete() } } catch (_: Exception) {}
+            context.assets.open("cleo/GTASAsf8.b").use { input ->
+                FileOutputStream(target).use { out -> input.copyTo(out) }
+            }
+            if (target.exists() && target.length() >= 180_000L) {
                 return
             }
         } catch (_: Exception) {}
