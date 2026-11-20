@@ -2343,27 +2343,45 @@ public:
         // ====================================================================
         if (!initialAlleyFreeRoamDone_ && std::fabs(me.x - 970.9f) < 2.5f && std::fabs(me.y - (-1108.1f)) < 2.5f) {
             if (++alleyLandWaitTicks_ >= 20) {
-                if (gtaSymbols_.onAMissionFlagOffset) {
-                    *gtaSymbols_.onAMissionFlagOffset = 0;
-                }
-                onMission = false;
+                // IMPORTANTE: Jamás poner *onAMissionFlagOffset = 0 aquí para no abortar la misión inicial de las BMX en uno de los teléfonos
                 float targetX = 967.2f;
                 float targetY = config_.isHost ? -1107.8f : -1105.9f;
                 float targetZ = 23.98f;
                 if (gtaSymbols_.cpedTeleportFn) {
                     gtaSymbols_.cpedTeleportFn(localPed, CVector{targetX, targetY, targetZ}, 0);
                 }
+                if (!config_.isHost && gtaSymbols_.ccarCtrlCreateCarForScriptFn && gtaSymbols_.isModelLoaded(481)) {
+                    void* guestBmx = gtaSymbols_.ccarCtrlCreateCarForScriptFn(481, CVector{969.2f, -1105.9f, 23.98f}, 0);
+                    if (guestBmx) {
+                        *reinterpret_cast<uint8_t*>(reinterpret_cast<uintptr_t>(guestBmx) + 0x610) = 2; // MISSION_VEHICLE
+                    }
+                }
                 me.x = targetX;
                 me.y = targetY;
                 me.z = targetZ;
                 initialAlleyFreeRoamDone_ = true;
                 initialSyncTeleportDone_ = config_.isHost;
-                LOGI("Positioned %s CJ in open alley courtyard at (%.1f, %.1f, %.1f) facing +X!",
-                     config_.isHost ? "HOST" : "GUEST", targetX, targetY, targetZ);
+                LOGI("Positioned %s CJ in open alley courtyard at (%.1f, %.1f, %.1f) preserving $ONMISSION=%d!",
+                     config_.isHost ? "HOST" : "GUEST", targetX, targetY, targetZ, onMission ? 1 : 0);
             }
         }
 
-        pendingMissionMeetupTeleport_.store(false);
+        // Si el compañero acaba de activar el inicio de misión en la señal roja y estamos cerca (< 25m) pero a un paso del borde,
+        // sincronizar nuestra posición exacta con la señal roja para que ambos entren juntos a la misión en el mismo frame
+        if (pendingMissionMeetupTeleport_.exchange(false) && !onMission && !myVeh && gtaSymbols_.cpedTeleportFn) {
+            float mdx = mission_.checkpointX - myPos.x;
+            float mdy = mission_.checkpointY - myPos.y;
+            float mDistSq = mdx * mdx + mdy * mdy;
+            if (mDistSq > (0.5f * 0.5f) && mDistSq < (25.0f * 25.0f) && std::fabs(mission_.checkpointX) > 1.0f) {
+                CVector mPos{mission_.checkpointX, mission_.checkpointY, mission_.checkpointZ};
+                gtaSymbols_.cpedTeleportFn(localPed, mPos, 0);
+                me.x = mPos.x;
+                me.y = mPos.y;
+                me.z = mPos.z;
+                LOGI("Pulled local player into mission trigger at (%.1f, %.1f, %.1f) so both enter mission together!",
+                     mPos.x, mPos.y, mPos.z);
+            }
+        }
         if (onMission && !lastLocalOnMission_) {
             mission_.onMissionFlag = 1;
             mission_.checkpointX = me.x;
@@ -2690,23 +2708,33 @@ public:
             if (gtaSymbols_.oldWeatherType) *gtaSymbols_.oldWeatherType = worldState_.oldWeather;
             if (gtaSymbols_.newWeatherType) *gtaSymbols_.newWeatherType = worldState_.newWeather;
 
-            // Mantener población peatonal natural en el Guest y evitar que el motor purgue peatones/objetos cuando ambos viajan juntos
+            // Calcular distancia al Host: si el Host se alejó en un vehículo (> 55m), mantener tráfico local natural
+            // en el Guest para que siga viendo bien todo su entorno
+            float hostDx = players_[0].x - me.x;
+            float hostDy = players_[0].y - me.y;
+            float distToHostSq = players_[0].hasRealGtaCoords ? (hostDx * hostDx + hostDy * hostDy) : 0.0f;
+            bool hostSeparatedInVeh = (distToHostSq > (55.0f * 55.0f));
+
             if (gtaSymbols_.dontCreateRandomCops) *gtaSymbols_.dontCreateRandomCops = 1;
             if (gtaSymbols_.dontCreateRandomGangMembers) *gtaSymbols_.dontCreateRandomGangMembers = 1;
             if (gtaSymbols_.pedDensityMultiplier) *gtaSymbols_.pedDensityMultiplier = 1.0f;
             if (gtaSymbols_.maxNumberOfPedsInUse) *gtaSymbols_.maxNumberOfPedsInUse = 20;
-            if (gtaSymbols_.carDensityMultiplier) *gtaSymbols_.carDensityMultiplier = 0.0f;
-            if (gtaSymbols_.maxNumberOfCarsInUse) *gtaSymbols_.maxNumberOfCarsInUse = 0;
+            if (gtaSymbols_.carDensityMultiplier) *gtaSymbols_.carDensityMultiplier = hostSeparatedInVeh ? 0.8f : 0.0f;
+            if (gtaSymbols_.maxNumberOfCarsInUse) *gtaSymbols_.maxNumberOfCarsInUse = hostSeparatedInVeh ? 8 : 0;
 
             // IMPORTANTE: NUNCA invocar CStreaming::LoadAllRequestedModels desde CWorld::Process para evitar
             // condición de carrera con CdStreamThread (OS_FileSetPosition). CStreaming::Update carga los modelos
             // solicitados por RequestModel de forma asíncrona y segura en el siguiente frame.
             bool canRequestStreamingThisTick = (tickCount % 5 == 0);
 
-            // 1. Instanciar y actualizar en el Guest los peatones reales sincronizados desde el Host (NUNCA modelo 0 / CJ ni personajes de misión 265..299)
+            // 1. Instanciar y actualizar en el Guest los peatones reales sincronizados desde el Host (sólo si están a <= 110m del Guest
+            //    para jamás instanciar MISSION_CHAR en sectores descargados del mapa que degradarían el streaming del entorno)
             for (int k = 0; k < kMaxSyncedWorldPeds; ++k) {
                 const SyncedWorldPedEntry& wp = worldState_.peds[k];
-                bool validPedEntry = (wp.active != 0 && wp.modelId > 0 && wp.modelId < 265);
+                float wpDx = wp.x - me.x;
+                float wpDy = wp.y - me.y;
+                bool validPedEntry = (wp.active != 0 && wp.modelId > 0 && wp.modelId < 265 &&
+                                      (wpDx * wpDx + wpDy * wpDy) <= (110.0f * 110.0f));
                 if (validPedEntry && gtaSymbols_.cpoolsPedPool) {
                     void* poolPtr = *reinterpret_cast<void**>(gtaSymbols_.cpoolsPedPool);
                     if (poolPtr) {
@@ -2854,11 +2882,14 @@ public:
                 }
             }
 
-            // 2. Instanciar y actualizar en el Guest los vehículos sincronizados desde el Host
-            //    (Protegiendo myVeh para jamás sobrescribir su slot/color ni duplicar ambulancias/autos)
+            // 2. Instanciar y actualizar en el Guest los vehículos sincronizados desde el Host (sólo si están a <= 115m del Guest
+            //    para no poblar sectores lejanos descargados cuando el compañero se aleja en otro vehículo)
             for (int v = 0; v < kMaxSyncedWorldVehicles; ++v) {
                 const SyncedWorldVehicleEntry& ve = worldState_.vehicles[v];
-                bool validVehEntry = (ve.active != 0 && ve.modelId >= 400 && ve.modelId <= 611);
+                float veDx = ve.x - me.x;
+                float veDy = ve.y - me.y;
+                bool validVehEntry = (ve.active != 0 && ve.modelId >= 400 && ve.modelId <= 611 &&
+                                      (veDx * veDx + veDy * veDy) <= (115.0f * 115.0f));
                 if (validVehEntry && (worldSyncVehPtr_[v] == nullptr || worldSyncVehHostSlot_[v] != ve.hostPoolSlot)) {
                     for (int otherV = 0; otherV < kMaxSyncedWorldVehicles; ++otherV) {
                         if (otherV != v && worldSyncVehPtr_[otherV] != nullptr &&
@@ -2922,14 +2953,22 @@ public:
 
                 if (!validVehEntry || (wVeh && (worldSyncVehModel_[v] != ve.modelId || worldSyncVehHostSlot_[v] != ve.hostPoolSlot) && wVeh != myVeh)) {
                     if (wVeh && wVeh != myVeh && wVeh != localRoofVehPtr_) {
-                        // Evictar siempre los vehículos NPC que NOSOTROS spawneamos al liberar su slot para que jamás
-                        // queden autos abandonados acumulándose en la calle; jamás tocar vehículos de misión (!worldSyncVehSpawnedByUs_[v]).
-                        if (worldSyncVehSpawnedByUs_[v]) {
+                        uintptr_t wvMat = *reinterpret_cast<uintptr_t*>(reinterpret_cast<uintptr_t>(wVeh) + 0x18);
+                        float vdx = wvMat ? (*reinterpret_cast<float*>(wvMat + 0x30) - me.x) : 999.0f;
+                        float vdy = wvMat ? (*reinterpret_cast<float*>(wvMat + 0x34) - me.y) : 999.0f;
+                        // Si el vehículo que spawneamos ya quedó lejos (> 50m), evictarlo; si sigue en pantalla (<= 50m),
+                        // liberarlo como RANDOM_VEHICLE para que no desaparezca bruscamente cuando el compañero se aleja en auto
+                        if (worldSyncVehSpawnedByUs_[v] && (vdx * vdx + vdy * vdy) > (50.0f * 50.0f)) {
                             if (worldSyncVehDriverPtr_[v] && gtaSymbols_.cpoolsGetPedFn && worldSyncVehDriverHandle_[v] > 0 &&
                                 gtaSymbols_.cpoolsGetPedFn(worldSyncVehDriverHandle_[v]) == worldSyncVehDriverPtr_[v]) {
                                 evictNpcPedFromWorld(worldSyncVehDriverPtr_[v], localPed);
                             }
                             evictVehicleFromWorld(wVeh, localPed);
+                        } else if (worldSyncVehSpawnedByUs_[v]) {
+                            *reinterpret_cast<uint8_t*>(reinterpret_cast<uintptr_t>(wVeh) + 0x610) = 1; // RANDOM_VEHICLE
+                            if (worldSyncVehDriverPtr_[v] && gtaSymbols_.cpedSetCharCreatedByFn) {
+                                gtaSymbols_.cpedSetCharCreatedByFn(worldSyncVehDriverPtr_[v], 1 /*RANDOM_CHAR*/);
+                            }
                         }
                         wVeh = nullptr;
                         worldSyncVehPtr_[v] = nullptr;
@@ -3008,18 +3047,22 @@ public:
                                 break;
                             }
                         }
-                        // Para vehículos NPC (no conducidos por un compañero): exigir distancia mínima (18m, o 32m al frente si conducimos)
-                        // y rate-limit para evitar que spawneen autos de la nada delante del jugador
+                        // Para vehículos NPC (no conducidos por un compañero): evitar spawnear autos justo delante si vamos conduciendo,
+                        // pero permitir spawnear vehículos estacionados o tráfico cercano cuando el jugador va a pie (overlapsAnyExistingVeh ya protege 6m)
                         if (!occupiedByCoopPartner) {
                             if ((tickCount - lastGuestVehSpawnTick_) < 20) continue;
                             float vdx = ve.x - me.x;
                             float vdy = ve.y - me.y;
                             float vDistSq = vdx * vdx + vdy * vdy;
-                            if (vDistSq < (18.0f * 18.0f)) continue;
                             float mySpdSq = me.vx * me.vx + me.vy * me.vy;
-                            if (myVeh != nullptr && mySpdSq > (0.04f * 0.04f)) {
-                                float dotFwd = vdx * me.vx + vdy * me.vy;
-                                if (dotFwd > 0.0f && vDistSq < (34.0f * 34.0f)) continue;
+                            if (myVeh != nullptr) {
+                                if (vDistSq < (14.0f * 14.0f)) continue;
+                                if (mySpdSq > (0.04f * 0.04f)) {
+                                    float dotFwd = vdx * me.vx + vdy * me.vy;
+                                    if (dotFwd > 0.0f && vDistSq < (32.0f * 32.0f)) continue;
+                                }
+                            } else {
+                                if (vDistSq < (7.5f * 7.5f)) continue;
                             }
                         }
                         // Jamás spawnear un vehículo encima de otro vehículo ya existente en el pool
@@ -3398,6 +3441,36 @@ public:
                     }
                 }
 
+                float remDistToMeSq = (targetRemX - me.x) * (targetRemX - me.x) +
+                                      (targetRemY - me.y) * (targetRemY - me.y);
+
+                // Si el compañero remoto está en un sector del mapa muy lejano (> 150m), NO mantener su vehículo anclado
+                // como MISSION_VEHICLE para no saturar ni desincronizar el CStreaming del entorno local
+                if (remDistToMeSq > (150.0f * 150.0f)) {
+                    if (remCurrentlyInVeh) {
+                        warpPedOutOfVehicle(ped);
+                        remCurrentlyInVeh = false;
+                        remCurrentVeh = nullptr;
+                    }
+                    if (remotePartnerVehPtr_[i] != nullptr) {
+                        if (gtaSymbols_.cpoolsGetVehicleFn && remotePartnerVehHandle_[i] > 0 &&
+                            gtaSymbols_.cpoolsGetVehicleFn(remotePartnerVehHandle_[i]) == remotePartnerVehPtr_[i]) {
+                            if (remotePartnerVehPtr_[i] != myVeh) {
+                                evictVehicleFromWorld(remotePartnerVehPtr_[i], localPed);
+                            }
+                        }
+                        remotePartnerVehPtr_[i] = nullptr;
+                        remotePartnerVehHandle_[i] = -1;
+                    }
+                    applySmoothPedTransformAndAnim(
+                        ped, targetRemX, targetRemY, targetRemZ,
+                        rem.vx, rem.vy, rem.vz, rem.heading,
+                        static_cast<int>(rem.animId), 200.0f, rem.lastNetworkUpdateMs,
+                        rem.isCrouching != 0
+                    );
+                    continue;
+                }
+
                 if (rem.seatIndex >= 0) {
                     // Buscar el CVehicle compartido en el mundo local donde viaja el compañero remoto
                     // verificando SIEMPRE que el modelo 3D coincida con rem.vehicleModelId (nunca poner en bicicleta si va en ambulancia)
@@ -3434,7 +3507,9 @@ public:
                         }
                     }
 
-                    if (!targetVeh && myVeh) {
+                    // Sólo asociar myVeh si el compañero es pasajero nuestro (rem.seatIndex > 0) o nosotros somos pasajeros suyos (me.seatIndex > 0);
+                    // jamás secuestrar myVeh si ambos vamos como conductores de vehículos independientes (rem.seatIndex == 0 && me.seatIndex == 0)
+                    if (!targetVeh && myVeh && (rem.seatIndex > 0 || me.seatIndex > 0)) {
                         int16_t myVehModel = *reinterpret_cast<int16_t*>(reinterpret_cast<uintptr_t>(myVeh) + 0x32);
                         if (expectedVehModel < 0 || myVehModel == expectedVehModel) {
                             uintptr_t myVehMat = *reinterpret_cast<uintptr_t*>(reinterpret_cast<uintptr_t>(myVeh) + 0x18);
@@ -3448,7 +3523,20 @@ public:
                         }
                     }
 
-                    // Buscar en CPools::ms_pVehiclePool (tanto en Host como en Guest) el vehículo más cercano con el mismo modelo
+                    // Reutilizar primero el vehículo ya instanciado para este compañero si sigue válido en el pool y coincide el modelo
+                    if (!targetVeh && remotePartnerVehPtr_[i] != nullptr && gtaSymbols_.cpoolsGetVehicleFn && remotePartnerVehHandle_[i] > 0) {
+                        if (gtaSymbols_.cpoolsGetVehicleFn(remotePartnerVehHandle_[i]) == remotePartnerVehPtr_[i]) {
+                            int16_t savedModel = *reinterpret_cast<int16_t*>(reinterpret_cast<uintptr_t>(remotePartnerVehPtr_[i]) + 0x32);
+                            if (expectedVehModel < 0 || savedModel == expectedVehModel) {
+                                targetVeh = remotePartnerVehPtr_[i];
+                            }
+                        } else {
+                            remotePartnerVehPtr_[i] = nullptr;
+                            remotePartnerVehHandle_[i] = -1;
+                        }
+                    }
+
+                    // Buscar en CPools::ms_pVehiclePool el vehículo más cercano con el mismo modelo (sin robar myVeh cuando ambos conducen)
                     if (!targetVeh && gtaSymbols_.cpoolsVehiclePool) {
                         void* vPoolPtr = *reinterpret_cast<void**>(gtaSymbols_.cpoolsVehiclePool);
                         if (vPoolPtr) {
@@ -3456,12 +3544,17 @@ public:
                             uint8_t* vObjects = *reinterpret_cast<uint8_t**>(vPoolAddr + 0x00);
                             uint8_t* vByteMap = *reinterpret_cast<uint8_t**>(vPoolAddr + 0x08);
                             int32_t vPoolSize = *reinterpret_cast<int32_t*>(vPoolAddr + 0x10);
-                            float bestDistSq = 28.0f * 28.0f;
+                            float bestDistSq = (rem.seatIndex == 0) ? (10.0f * 10.0f) : (24.0f * 24.0f);
                             if (vObjects && vByteMap && vPoolSize > 0 && vPoolSize <= 256) {
                                 for (int32_t s = 0; s < vPoolSize; ++s) {
                                     if ((vByteMap[s] & 0x80) != 0) continue;
                                     void* cand = reinterpret_cast<void*>(vObjects + static_cast<size_t>(s) * 0xc68);
+                                    if (cand == myVeh && rem.seatIndex == 0 && me.seatIndex == 0) continue;
                                     uintptr_t cvAddr = reinterpret_cast<uintptr_t>(cand);
+                                    if (rem.seatIndex == 0) {
+                                        void* candDrv = *reinterpret_cast<void**>(cvAddr + 0x5a0);
+                                        if (candDrv == localPed) continue;
+                                    }
                                     int16_t cvModel = *reinterpret_cast<int16_t*>(cvAddr + 0x32);
                                     if (expectedVehModel >= 400 && cvModel != expectedVehModel) continue;
                                     uintptr_t cMat = *reinterpret_cast<uintptr_t*>(cvAddr + 0x18);
@@ -3475,19 +3568,6 @@ public:
                                     }
                                 }
                             }
-                        }
-                    }
-
-                    // Reutilizar el vehículo ya instanciado para este compañero si sigue válido en el pool y coincide el modelo
-                    if (!targetVeh && remotePartnerVehPtr_[i] != nullptr && gtaSymbols_.cpoolsGetVehicleFn && remotePartnerVehHandle_[i] > 0) {
-                        if (gtaSymbols_.cpoolsGetVehicleFn(remotePartnerVehHandle_[i]) == remotePartnerVehPtr_[i]) {
-                            int16_t savedModel = *reinterpret_cast<int16_t*>(reinterpret_cast<uintptr_t>(remotePartnerVehPtr_[i]) + 0x32);
-                            if (expectedVehModel < 0 || savedModel == expectedVehModel) {
-                                targetVeh = remotePartnerVehPtr_[i];
-                            }
-                        } else {
-                            remotePartnerVehPtr_[i] = nullptr;
-                            remotePartnerVehHandle_[i] = -1;
                         }
                     }
 
@@ -4172,15 +4252,18 @@ public:
             case PKT_MISSION_SYNC: {
                 if (len < sizeof(MissionSyncPacket)) return false;
                 const auto* ms = reinterpret_cast<const MissionSyncPacket*>(data);
-                bool newlyStartedMission = (mission_.onMissionFlag == 0 && ms->onMissionFlag != 0);
+                bool newlyStartedMission = (!lastLocalOnMission_ && ms->onMissionFlag != 0 &&
+                                            std::fabs(ms->checkpointPos.x) > 1.0f);
                 mission_.onMissionFlag = ms->onMissionFlag;
                 std::memcpy(mission_.missionId, ms->missionId, sizeof(mission_.missionId));
                 mission_.missionId[sizeof(mission_.missionId) - 1] = '\0';
                 mission_.checkpointIndex = ms->checkpointIndex;
                 mission_.totalCheckpoints = ms->totalCheckpoints;
-                mission_.checkpointX = ms->checkpointPos.x;
-                mission_.checkpointY = ms->checkpointPos.y;
-                mission_.checkpointZ = ms->checkpointPos.z;
+                if (std::fabs(ms->checkpointPos.x) > 1.0f || std::fabs(ms->checkpointPos.y) > 1.0f) {
+                    mission_.checkpointX = ms->checkpointPos.x;
+                    mission_.checkpointY = ms->checkpointPos.y;
+                    mission_.checkpointZ = ms->checkpointPos.z;
+                }
                 mission_.checkpointRadius = ms->checkpointRadius;
                 if (newlyStartedMission) {
                     pendingMissionMeetupTeleport_.store(true);
@@ -4667,11 +4750,8 @@ public:
     void onLocateCharCommand(void* selfScript, int commandId) {
 #if defined(__unix__) || defined(__ANDROID__) || defined(__linux__)
         if (!selfScript || !gtaSymbols_.scriptParams) return;
-        // Sólo exigir ambos jugadores en la señal roja (corona) cuando estamos en Free Roam ($ONMISSION == 0)
-        // a punto de iniciar una misión; dentro de una misión en curso no bloquear checkpoints intermedios
         bool onMission = (gtaSymbols_.onAMissionFlagOffset && *gtaSymbols_.onAMissionFlagOffset != 0) ||
                          (gtaSymbols_.isPlayerOnAMissionFn && gtaSymbols_.isPlayerOnAMissionFn());
-        if (onMission) return;
 
         auto* spInt = reinterpret_cast<int32_t*>(gtaSymbols_.scriptParams);
         auto* spFlt = reinterpret_cast<float*>(gtaSymbols_.scriptParams);
@@ -4685,6 +4765,13 @@ public:
                                       std::fabs(ry) > 0.1f && std::fabs(ry) <= 2.5f);
         if (bSphere == 0 && !isSmallMissionTrigger) return;
 
+        // Permitir sincronización de marcador en Free Roam ($ONMISSION == 0) y también en el marcador rojo
+        // de llegada a la casa de CJ en Grove Street (2495, -1686) al final del prólogo de las BMX
+        bool isGroveHouseIntroTrigger = (std::fabs(targetX - 2495.0f) < 32.0f &&
+                                         std::fabs(targetY - (-1686.0f)) < 32.0f &&
+                                         std::fabs(rx) <= 4.5f && std::fabs(ry) <= 4.5f);
+        if (onMission && !isGroveHouseIntroTrigger) return;
+
         uintptr_t scriptAddr = reinterpret_cast<uintptr_t>(selfScript);
         uint8_t condResult = *reinterpret_cast<uint8_t*>(scriptAddr + 0x115);
         uint8_t notFlag = *reinterpret_cast<uint8_t*>(scriptAddr + 0x122);
@@ -4693,8 +4780,8 @@ public:
         bool localInsideMarker = ((condResult != 0) != (notFlag != 0));
         if (!localInsideMarker) return;
 
-        float reqRx = std::max(std::fabs(rx), 1.5f) + 1.2f;
-        float reqRy = std::max(std::fabs(ry), 1.5f) + 1.2f;
+        float reqRx = std::max(std::fabs(rx), 1.5f) + 1.5f;
+        float reqRy = std::max(std::fabs(ry), 1.5f) + 1.5f;
 
         uint64_t nowMs = currentTimeMillis();
         int localIdx = std::clamp(config_.localPlayerSlot, 1, kMaxCoopPlayers) - 1;
