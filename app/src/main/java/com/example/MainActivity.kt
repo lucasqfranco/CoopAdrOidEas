@@ -19,7 +19,10 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.ui.res.painterResource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -156,10 +159,18 @@ class MainActivity : ComponentActivity() {
                         TopAppBar(
                             title = {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Image(
+                                        painter = painterResource(id = R.drawable.ic_coopandreas_logo),
+                                        contentDescription = "CoopAndreas Logo",
+                                        modifier = Modifier
+                                            .size(28.dp)
+                                            .clip(RoundedCornerShape(7.dp))
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
                                     Text(
                                         text = "COOPANDREAS",
                                         fontFamily = BebasNeueFontFamily,
-                                        fontSize = 24.sp,
+                                        fontSize = 23.sp,
                                         color = GroveGreen,
                                         letterSpacing = 1.sp
                                     )
@@ -187,6 +198,7 @@ class MainActivity : ComponentActivity() {
                                             if (voiceState.isPttPressed) GroveGreen.copy(alpha = 0.25f)
                                             else Color(0xFF142418)
                                         )
+                                        .clickable { viewModel.setNavTab(AppNavTab.VOICE) }
                                         .padding(horizontal = 8.dp, vertical = 4.dp),
                                     contentAlignment = Alignment.Center
                                 ) {

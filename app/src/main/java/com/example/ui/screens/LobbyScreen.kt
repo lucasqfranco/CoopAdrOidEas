@@ -453,7 +453,7 @@ fun LobbyScreen(
         }
 
         // =====================================================================
-        // PASO 3: ELEGÍ TU PERSONAJE
+        // PASO 3: ELEGÍ TU PERSONAJE (COMPACTO Y DESPLEGABLE PARA ACCESO RÁPIDO A JUGAR)
         // =====================================================================
         Card(
             modifier = Modifier.fillMaxWidth(),
@@ -461,6 +461,7 @@ fun LobbyScreen(
             shape = RoundedCornerShape(16.dp),
             border = BorderStroke(1.dp, Color(0xFF28382C))
         ) {
+            var showSkinPicker by remember { mutableStateOf(false) }
             var selectedCategory by remember { mutableStateOf(modStatus.mySelectedSkin.category) }
             var customSkinInput by remember(modStatus.customSkinId, modStatus.mySelectedSkin) {
                 mutableStateOf((modStatus.customSkinId ?: modStatus.mySelectedSkin.modelId).toString())
@@ -468,13 +469,37 @@ fun LobbyScreen(
             val activeSkinId = modStatus.customSkinId ?: modStatus.mySelectedSkin.modelId
 
             Column(modifier = Modifier.padding(14.dp)) {
-                Text(
-                    text = "3. ELEGÍ TU PERSONAJE: ${modStatus.mySelectedSkin.displayName.uppercase()} (ID $activeSkinId)",
-                    fontFamily = BebasNeueFontFamily,
-                    fontSize = 15.sp,
-                    color = Color.LightGray
-                )
-                Spacer(modifier = Modifier.height(6.dp))
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { showSkinPicker = !showSkinPicker },
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                        Box(
+                            modifier = Modifier
+                                .size(12.dp)
+                                .clip(CircleShape)
+                                .background(Color(modStatus.myMarkerColor.colorHex))
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "3. PERSONAJE: ${modStatus.mySelectedSkin.displayName.uppercase()} (ID $activeSkinId)",
+                            fontFamily = BebasNeueFontFamily,
+                            fontSize = 15.sp,
+                            color = Color.LightGray
+                        )
+                    }
+                    Text(
+                        text = if (showSkinPicker) "OCULTAR ▲" else "CAMBIAR ▼",
+                        fontFamily = BebasNeueFontFamily,
+                        fontSize = 13.sp,
+                        color = SanAndreasGold
+                    )
+                }
+                if (showSkinPicker) {
+                Spacer(modifier = Modifier.height(8.dp))
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
@@ -586,6 +611,7 @@ fun LobbyScreen(
                             )
                         }
                     }
+                }
                 }
             }
         }

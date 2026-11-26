@@ -2917,10 +2917,20 @@ public:
                 }
             }
         } else if (worldState_.lastNetworkUpdateMs > 0 && (nowMs - worldState_.lastNetworkUpdateMs) < 20000) {
-            // Aplicar hora exacta y clima del Host en el Guest
-            if (gtaSymbols_.clockHours) *gtaSymbols_.clockHours = worldState_.clockHours;
-            if (gtaSymbols_.clockMinutes) *gtaSymbols_.clockMinutes = worldState_.clockMinutes;
-            if (gtaSymbols_.clockSeconds) *gtaSymbols_.clockSeconds = worldState_.clockSeconds;
+            // Sincronizar hora del Host en el Guest SIN sobrescribir clockSeconds ni provocar micro-saltos de minuto:
+            // Sobrescribir ms_nGameClockSeconds/Minutes cada frame dispara múltiples rollovers de minuto en CClock::Update()
+            // y acelera CPlayerInfo::WorkOutEnergyFromHunger() / descenso de stats (Grasa, Músculo, Resistencia).
+            // Solo ajustar si el desfase supera >= 2 minutos de juego.
+            if (gtaSymbols_.clockHours && gtaSymbols_.clockMinutes) {
+                int hostTotalMin = static_cast<int>(worldState_.clockHours) * 60 + static_cast<int>(worldState_.clockMinutes);
+                int localTotalMin = static_cast<int>(*gtaSymbols_.clockHours) * 60 + static_cast<int>(*gtaSymbols_.clockMinutes);
+                int diffMin = std::abs(hostTotalMin - localTotalMin);
+                if (diffMin > 720) diffMin = 1440 - diffMin;
+                if (diffMin >= 2) {
+                    *gtaSymbols_.clockHours = worldState_.clockHours;
+                    *gtaSymbols_.clockMinutes = worldState_.clockMinutes;
+                }
+            }
             if (gtaSymbols_.oldWeatherType) *gtaSymbols_.oldWeatherType = worldState_.oldWeather;
             if (gtaSymbols_.newWeatherType) *gtaSymbols_.newWeatherType = worldState_.newWeather;
 
