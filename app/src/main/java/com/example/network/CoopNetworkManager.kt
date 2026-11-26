@@ -1092,10 +1092,10 @@ class CoopNetworkManager(private val scope: CoroutineScope) {
 
     fun setTacticalRespawnBeacon() {
         val mySlot = if (_session.value.isHost) 1 else 2
-        val myPlayer = _session.value.players.firstOrNull { it.slotIndex == mySlot }
-        val x = myPlayer?.x ?: 2491.5f
-        val y = myPlayer?.y ?: -1668.5f
-        val z = myPlayer?.z ?: 13.35f
+        val myPlayer = _session.value.players.firstOrNull { it.id == "p$mySlot" || (mySlot == 1 && it.isHost) }
+        val x = myPlayer?.posX ?: 2491.5f
+        val y = myPlayer?.posY ?: -1668.5f
+        val z = myPlayer?.posZ ?: 13.35f
         CoopNativeBridge.setTacticalRespawnPoint(x, y, z)
         _session.value = _session.value.copy(
             connectionBannerMessage = "📍 Faro de Respawn Táctico fijado en (${x.toInt()}, ${y.toInt()}, ${z.toInt()}) conservando vida/chaleco"
