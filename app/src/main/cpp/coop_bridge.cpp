@@ -489,6 +489,8 @@ struct GtaSaNativeSymbols {
     using FnCTouchInterfaceIsHeldDown = bool (*)(int widgetId, int nEnableWidget);
     using FnCPedAddWeaponModel = void (*)(void* selfPed, int modelIndex);
     using FnCPedSetCurrentWeaponSlot = void (*)(void* selfPed, int slotIndex);
+    using FnCPadGetWeapon = uint8_t (*)(void* selfPad, void* ped, bool bCheckWeapon);
+    using FnCCameraSetNewPlayerWeaponMode = void (*)(void* selfCamera, int16_t mode, int16_t maxZoom, int16_t minZoom);
 
     FnCStreamingRequestSpecialChar cstreamingRequestSpecialCharFn = nullptr;
     FnCStreamingHasSpecialCharLoaded cstreamingHasSpecialCharLoadedFn = nullptr;
@@ -515,6 +517,9 @@ struct GtaSaNativeSymbols {
     FnCTouchInterfaceIsHeldDown ctouchInterfaceIsHeldDownFn = nullptr;
     FnCPedAddWeaponModel cpedAddWeaponModelFn = nullptr;
     FnCPedSetCurrentWeaponSlot cpedSetCurrentWeaponSlotFn = nullptr;
+    FnCPadGetWeapon cpadGetWeaponFn = nullptr;
+    FnCCameraSetNewPlayerWeaponMode ccameraSetNewPlayerWeaponModeFn = nullptr;
+    void* theCamera = nullptr;                      // TheCamera
     int32_t* scriptParams = nullptr;                // ScriptParams
     void* canimManagerAssocGroups = nullptr;        // _ZN12CAnimManager19ms_aAnimAssocGroupsE
     void* canimManagerAnimBlocks = nullptr;         // _ZN12CAnimManager14ms_aAnimBlocksE
@@ -660,6 +665,9 @@ struct GtaSaNativeSymbols {
         ctouchInterfaceIsHeldDownFn = reinterpret_cast<FnCTouchInterfaceIsHeldDown>(dlsym(libHandle, "_ZN15CTouchInterface10IsHeldDownENS_9WidgetIDsEi"));
         cpedAddWeaponModelFn = reinterpret_cast<FnCPedAddWeaponModel>(dlsym(libHandle, "_ZN4CPed14AddWeaponModelEi"));
         cpedSetCurrentWeaponSlotFn = reinterpret_cast<FnCPedSetCurrentWeaponSlot>(dlsym(libHandle, "_ZN4CPed16SetCurrentWeaponEi"));
+        cpadGetWeaponFn = reinterpret_cast<FnCPadGetWeapon>(dlsym(libHandle, "_ZN4CPad9GetWeaponEP4CPedb"));
+        ccameraSetNewPlayerWeaponModeFn = reinterpret_cast<FnCCameraSetNewPlayerWeaponMode>(dlsym(libHandle, "_ZN7CCamera22SetNewPlayerWeaponModeEsss"));
+        theCamera = dlsym(libHandle, "TheCamera");
         scriptParams = reinterpret_cast<int32_t*>(dlsym(libHandle, "ScriptParams"));
         canimManagerAssocGroups = dlsym(libHandle, "_ZN12CAnimManager19ms_aAnimAssocGroupsE");
         canimManagerAnimBlocks = dlsym(libHandle, "_ZN12CAnimManager14ms_aAnimBlocksE");
@@ -843,6 +851,7 @@ static GtaSaNativeSymbols::FnCRunningScriptLocateCharCommand g_origCRunningScrip
 static GtaSaNativeSymbols::FnCPlayerPedCanPlayerStartMission g_origCPlayerPedCanPlayerStartMission = nullptr;
 static GtaSaNativeSymbols::FnCCutsceneMgrSkipCutscene g_origCCutsceneMgrSkipCutscene = nullptr;
 static GtaSaNativeSymbols::FnCCutsceneMgrIsSkipPressed g_origCCutsceneMgrIsSkipPressed = nullptr;
+static GtaSaNativeSymbols::FnCPadGetWeapon g_origCPadGetWeapon = nullptr;
 static void Hooked_CWorld_Process();
 static void Hooked_CClothes_RebuildPlayer(void* playerPed, bool bIgnoreFatAndMuscle);
 static void Hooked_CClothes_RebuildPlayerIfNeeded(void* playerPed);
@@ -852,6 +861,7 @@ static void Hooked_CRunningScript_LocateCharCommand(void* selfScript, int comman
 static bool Hooked_CPlayerPed_CanPlayerStartMission(void* selfPlayerPed);
 static void Hooked_CCutsceneMgr_SkipCutscene();
 static bool Hooked_CCutsceneMgr_IsSkipButtonPressed();
+static uint8_t Hooked_CPad_GetWeapon(void* selfPad, void* ped, bool bCheckWeapon);
 
 class CoopEngineBridge {
 public:
@@ -910,6 +920,7 @@ public:
         g_origCPlayerPedCanPlayerStartMission = gtaSymbols_.cplayerPedCanPlayerStartMissionFn;
         g_origCCutsceneMgrSkipCutscene = gtaSymbols_.ccutsceneMgrSkipCutsceneFn;
         g_origCCutsceneMgrIsSkipPressed = gtaSymbols_.ccutsceneMgrIsSkipPressedFn;
+        g_origCPadGetWeapon = gtaSymbols_.cpadGetWeaponFn;
 
         // 0. En libGTASA.so v2.10 arm64, CTaskSimpleStandStill::ProcessPed (0x5ef6ec) llama a
         // CPed::SetMoveState(ped, 1) en 0x5ef7f0 en cada frame subsiguiente, sobrescribiendo el
@@ -952,6 +963,7 @@ public:
         hookGotOffset(0x848630, reinterpret_cast<void*>(gtaSymbols_.cplayerPedCanPlayerStartMissionFn), reinterpret_cast<void*>(&Hooked_CPlayerPed_CanPlayerStartMission));
         hookGotOffset(0x846890, reinterpret_cast<void*>(gtaSymbols_.ccutsceneMgrSkipCutsceneFn), reinterpret_cast<void*>(&Hooked_CCutsceneMgr_SkipCutscene));
         hookGotOffset(0x8448c0, reinterpret_cast<void*>(gtaSymbols_.ccutsceneMgrIsSkipPressedFn), reinterpret_cast<void*>(&Hooked_CCutsceneMgr_IsSkipButtonPressed));
+        hookGotOffset(0x844f50, reinterpret_cast<void*>(gtaSymbols_.cpadGetWeaponFn), reinterpret_cast<void*>(&Hooked_CPad_GetWeapon));
 
         // 1. Check exact GOT offset 0x843fb0 in libGTASA.so v2.10 arm64-v8a first
         if (hookGotOffset(0x843fb0, targetFn, reinterpret_cast<void*>(&Hooked_CWorld_Process))) {
@@ -1663,9 +1675,13 @@ public:
         if (!localPed) {
             // El jugador aún está en el menú principal o pantalla de carga
             lastLocalPedPtr_ = nullptr;
+            localAppliedSkinReqId_ = 0;
+            localPassengerDriveByFiring_.store(false, std::memory_order_relaxed);
+            localPassengerDriveByPed_.store(nullptr, std::memory_order_relaxed);
             for (int i = 0; i < kMaxCoopPlayers; ++i) {
                 remotePedPtr_[i] = nullptr;
                 remotePedHandle_[i] = -1;
+                remotePedAppliedSkinId_[i] = 0;
                 specialSlotRequestedSkin_[i] = -1;
                 remoteWasJumping_[i] = false;
                 remotePartnerVehPtr_[i] = nullptr;
@@ -1695,12 +1711,14 @@ public:
         if (localPed != lastLocalPedPtr_) {
             // Se acaba de cargar una partida o reiniciar misión
             lastLocalPedPtr_ = localPed;
+            localAppliedSkinReqId_ = 0;
             initialSyncTeleportDone_ = false;
             initialAlleyFreeRoamDone_ = false;
             alleyLandWaitTicks_ = 0;
             for (int i = 0; i < kMaxCoopPlayers; ++i) {
                 remotePedPtr_[i] = nullptr;
                 remotePedHandle_[i] = -1;
+                remotePedAppliedSkinId_[i] = 0;
                 specialSlotRequestedSkin_[i] = -1;
                 remoteWasJumping_[i] = false;
                 remotePartnerVehPtr_[i] = nullptr;
@@ -1749,8 +1767,12 @@ public:
         };
 
         // Mientras el motor mantiene a CJ en las coordenadas internas de espera (2495.0, -1687.0, 13.5)
-        // durante la cinemática de apertura del aeropuerto/patrulla, no intervenir ni spawnear entidades
-        bool inIntroHoldingSpot = (std::fabs(myPos.x - 2495.0f) < 2.5f &&
+        // durante la cinemática de apertura del aeropuerto/patrulla ($ONMISSION != 0), no intervenir ni spawnear entidades.
+        // En modo libre ($ONMISSION == 0) en Grove Street jamás bloquear la casa de CJ.
+        bool onMissionNowPre = (gtaSymbols_.onAMissionFlagOffset && *gtaSymbols_.onAMissionFlagOffset != 0) ||
+                               (gtaSymbols_.isPlayerOnAMissionFn && gtaSymbols_.isPlayerOnAMissionFn());
+        bool inIntroHoldingSpot = (onMissionNowPre &&
+                                   std::fabs(myPos.x - 2495.0f) < 2.5f &&
                                    std::fabs(myPos.y - (-1687.0f)) < 2.5f &&
                                    tickCount < 2500);
         if (inIntroHoldingSpot) {
@@ -1850,6 +1872,9 @@ public:
             }
             if (curWepState == 1) { // WEAPONSTATE_FIRING
                 combatFlags |= (me.weaponId >= 22) ? 0x06u : 0x01u;
+                if (me.weaponId >= 22) {
+                    pendingWeaponFireBroadcast_.store(true, std::memory_order_relaxed);
+                }
             }
             me.animGroupId = combatFlags;
             me.isCrouching = localIsCrouching ? 1u : 0u;
@@ -2180,6 +2205,25 @@ public:
                                      localPed, me.seatIndex, me.weaponId);
                             }
                         }
+                        // Activar cámara nativa de Drive-By desde ventanilla (MODE_AIMWEAPON_FROMCAR = 55) en TheCamera
+                        // para que CTaskSimpleGangDriveBy::PlayerTarget marque m_bTargetInRange = 1 (+0x14), saque el torso por la ventanilla
+                        // y muestre la mira 360° exactamente como los miembros de la pandilla en las misiones
+                        if (gtaSymbols_.theCamera != nullptr) {
+                            uintptr_t camBase = reinterpret_cast<uintptr_t>(gtaSymbols_.theCamera);
+                            uint8_t activeCamIdx = *reinterpret_cast<uint8_t*>(camBase + 0x5f);
+                            if (activeCamIdx < 3) {
+                                uintptr_t activeCam = camBase + static_cast<size_t>(activeCamIdx) * 0x228;
+                                uint16_t curCamMode = *reinterpret_cast<uint16_t*>(activeCam + 0x186);
+                                if (curCamMode != 55 /*MODE_AIMWEAPON_FROMCAR*/ &&
+                                    curCamMode != 49 /*MODE_TWOPLAYER_IN_CAR_AND_SHOOTING*/ &&
+                                    curCamMode != 14 /*MODE_FIXED*/ && curCamMode != 15 /*MODE_1STPERSON*/) {
+                                    if (gtaSymbols_.ccameraSetNewPlayerWeaponModeFn) {
+                                        gtaSymbols_.ccameraSetNewPlayerWeaponModeFn(gtaSymbols_.theCamera, 55, 0, 0);
+                                    }
+                                    *reinterpret_cast<uint16_t*>(activeCam + 0x186) = 55;
+                                }
+                            }
+                        }
                         // Mantener activo el flag de targeting en vehículo (m_nPlayerFlags |= 8 en CPlayerPedData + 0x48)
                         // y habilitar los botones táctiles de disparo en el HUD móvil (WIDGET_ATTACK=0, SHOOT_LEFT=10, SHOOT_RIGHT=11)
                         uintptr_t playerData = *reinterpret_cast<uintptr_t*>(localPedAddr + 0x540);
@@ -2194,6 +2238,8 @@ public:
                         } else if (gtaSymbols_.ctouchInterfaceIsTouchedFn) {
                             if (gtaSymbols_.ctouchInterfaceIsTouchedFn(0 /*WIDGET_ATTACK*/, nullptr, 1)) manualFirePressed = true;
                         }
+                        localPassengerDriveByPed_.store(localPed, std::memory_order_relaxed);
+                        localPassengerDriveByFiring_.store(manualFirePressed, std::memory_order_relaxed);
                         if (secAttackTask != nullptr && manualFirePressed) {
                             uintptr_t dbAddr = reinterpret_cast<uintptr_t>(secAttackTask);
                             // Forzar sub-estado de disparo (m_nSubTaskState = 2 en +0x17) y cooldown = 0 (+0x1e) al mantener presionado el botón
@@ -2204,16 +2250,20 @@ public:
                             }
                             me.animGroupId |= 0x06u;
                             me.isAiming = 1u;
+                            pendingWeaponFireBroadcast_.store(true, std::memory_order_relaxed);
                         }
                         me.isDriveByActive = (secAttackTask != nullptr);
                     }
                 } else {
+                    localPassengerDriveByFiring_.store(false, std::memory_order_relaxed);
                     me.isDriveByActive = false;
                 }
             } else {
+                localPassengerDriveByFiring_.store(false, std::memory_order_relaxed);
                 me.isDriveByActive = false;
             }
         } else if (!me.isAttachedOnRoof) {
+            localPassengerDriveByFiring_.store(false, std::memory_order_relaxed);
             me.seatIndex = -1;
             me.isDriveByActive = false;
         }
@@ -2242,6 +2292,10 @@ public:
             }
             *reinterpret_cast<float*>(localPedAddr + 0x6ac) = 100.0f;
             *reinterpret_cast<float*>(localPedAddr + 0x6b0) = std::max(100.0f, *reinterpret_cast<float*>(localPedAddr + 0x6b0));
+            // Conservar chaleco (armor) durante el Respawn Táctico (RF-08)
+            float preservedArmor = std::isfinite(rawArmor) ? std::clamp(rawArmor, 0.0f, 200.0f) : 0.0f;
+            *reinterpret_cast<float*>(localPedAddr + 0x6b4) = preservedArmor;
+            me.armor = static_cast<int>(preservedArmor);
             *reinterpret_cast<int32_t*>(localPedAddr + 0x54c) = 1; // PEDSTATE_IDLE
             if (gtaSymbols_.cworldPlayers != nullptr) {
                 // CPlayerInfo::m_nPlayerState en +0x118 = 0 (PLAYERSTATE_PLAYING)
@@ -2326,7 +2380,8 @@ public:
                 int32_t targetLocalModel = resolvePlayerSkinModelId(
                     config_.localSkinModelId, localIdx, (tickCount % 5 == 0), localSkinLoaded
                 );
-                if (targetLocalModel > 0 && localSkinLoaded && curLocalModel != targetLocalModel) {
+                if (targetLocalModel > 0 && localSkinLoaded &&
+                    (curLocalModel != targetLocalModel || localAppliedSkinReqId_ != config_.localSkinModelId)) {
                     uintptr_t vtbl = *reinterpret_cast<uintptr_t*>(localPedAddr);
                     if (vtbl != 0) {
                         uint32_t savedAnimGroup = *reinterpret_cast<uint32_t*>(localPedAddr + 0x630);
@@ -2340,12 +2395,13 @@ public:
                             setModelIdxFn(localPed, static_cast<uint32_t>(targetLocalModel));
                             *reinterpret_cast<uint32_t*>(localPedAddr + 0x630) = savedAnimGroup;
                             localAppliedSkinModel_ = targetLocalModel;
+                            localAppliedSkinReqId_ = config_.localSkinModelId;
                             LOGI("Applied 09C7 Local Player Skin on CPlayerPed=%p (reqSkin=%d -> model=%d)",
                                  localPed, config_.localSkinModelId, targetLocalModel);
                         }
                     }
                 }
-            } else if (curLocalModel != 0 && gtaSymbols_.isModelLoaded(0)) {
+            } else if ((curLocalModel != 0 || localAppliedSkinReqId_ != 0) && gtaSymbols_.isModelLoaded(0)) {
                 uintptr_t vtbl = *reinterpret_cast<uintptr_t*>(localPedAddr);
                 if (vtbl != 0) {
                     uint32_t savedAnimGroup = *reinterpret_cast<uint32_t*>(localPedAddr + 0x630);
@@ -2362,6 +2418,7 @@ public:
                             g_origCClothesRebuildPlayer(localPed, false);
                         }
                         localAppliedSkinModel_ = 0;
+                        localAppliedSkinReqId_ = 0;
                     }
                 }
             }
@@ -2456,10 +2513,8 @@ public:
                         if (gtaSymbols_.ccheatVehicleCheatFn) {
                             gtaSymbols_.ccheatVehicleCheatFn(vehModel);
                         } else if (gtaSymbols_.cstreamingRequestModelFn) {
+                            // Carga asíncrona segura (RF-03 / RNF-01): jamás llamar LoadAllRequestedModels dentro de CWorld::Process
                             gtaSymbols_.cstreamingRequestModelFn(vehModel, 2);
-                            if (gtaSymbols_.cstreamingLoadAllRequestedModelsFn) {
-                                gtaSymbols_.cstreamingLoadAllRequestedModelsFn(false);
-                            }
                             pendingVehicleSpawnModel_ = vehModel;
                         }
                     }
@@ -2468,14 +2523,17 @@ public:
                     if (gtaSymbols_.oldWeatherType) *gtaSymbols_.oldWeatherType = 0;
                     if (gtaSymbols_.newWeatherType) *gtaSymbols_.newWeatherType = 0;
                     lastWorldCheatSynced_ = cheatCmd;
+                    pendingWorldCheatBroadcast_.store(true, std::memory_order_relaxed);
                 } else if (cheatCmd == "AUIFRVQS") {
                     if (gtaSymbols_.ccheatRainCheatFn) gtaSymbols_.ccheatRainCheatFn();
                     if (gtaSymbols_.oldWeatherType) *gtaSymbols_.oldWeatherType = 8;
                     if (gtaSymbols_.newWeatherType) *gtaSymbols_.newWeatherType = 8;
                     lastWorldCheatSynced_ = cheatCmd;
+                    pendingWorldCheatBroadcast_.store(true, std::memory_order_relaxed);
                 } else if (cheatCmd == "IOJUFZN") {
                     if (gtaSymbols_.ccheatRiotCheatFn) gtaSymbols_.ccheatRiotCheatFn();
                     lastWorldCheatSynced_ = cheatCmd;
+                    pendingWorldCheatBroadcast_.store(true, std::memory_order_relaxed);
                 }
                 lastAppliedCheatCmd_ = cheatCmd;
                 LOGI("Applied in-app cheat on CWorld::Process thread: %s", cheatCmd.c_str());
@@ -2708,6 +2766,20 @@ public:
                                 // +0x32 = CEntity::m_nModelIndex en arm64 v2.10
                                 int16_t vModel = *reinterpret_cast<int16_t*>(vAddr + 0x32);
                                 if (vModel < 400 || vModel > 611) continue;
+
+                                // Durante una misión activa ($ONMISSION != 0), no replicar vehículos de misión (m_nCreatedBy == 2)
+                                // salvo que un jugador cooperativo esté conduciéndolo, para no desincronizar/abortar la misión del Invitado
+                                uint8_t vCreatedBy = *reinterpret_cast<uint8_t*>(vAddr + 0x610);
+                                if (onMission && vCreatedBy == 2 && pVeh != myVeh) {
+                                    bool partnerInThisVeh = false;
+                                    for (int r = 0; r < kMaxCoopPlayers; ++r) {
+                                        if (r != localIdx && players_[r].isActive && players_[r].vehicleNetId == (1000 + s)) {
+                                            partnerInThisVeh = true;
+                                            break;
+                                        }
+                                    }
+                                    if (!partnerInThisVeh) continue;
+                                }
 
                                 // Si un compañero remoto conduce este vehículo, aplicar primero su daño sincronizado sobre el vehículo del Host
                                 for (int r = 0; r < kMaxCoopPlayers; ++r) {
@@ -3356,7 +3428,11 @@ public:
                             for (int r = 0; r < kMaxCoopPlayers; ++r) {
                                 if (curDrv == remotePedPtr_[r]) isRemPlayer = true;
                             }
-                            if (!isRemPlayer) {
+                            // Jamás expulsar/eliminar un personaje de misión (m_nCreatedBy == 2) salvo que sea el conductor NPC
+                            // que nosotros mismos creamos para tráfico sincronizado (worldSyncVehDriverPtr_[v])
+                            uint8_t curDrvCreatedBy = *reinterpret_cast<uint8_t*>(reinterpret_cast<uintptr_t>(curDrv) + 0x548);
+                            bool isExternalMissionChar = (curDrvCreatedBy == 2 && curDrv != worldSyncVehDriverPtr_[v]);
+                            if (!isRemPlayer && !isExternalMissionChar) {
                                 evictNpcPedFromWorld(curDrv, localPed);
                                 worldSyncVehDriverPtr_[v] = nullptr;
                                 worldSyncVehDriverHandle_[v] = -1;
@@ -3402,7 +3478,30 @@ public:
             if (i == localIdx) continue;
             PlayerState3D& rem = players_[i];
             bool peerRecentlyActive = (rem.lastNetworkUpdateMs > 0 && (nowMs - rem.lastNetworkUpdateMs) < 20000);
-            if (!peerRecentlyActive || !rem.hasRealGtaCoords) continue;
+            if (!peerRecentlyActive) {
+                // RNF-03: Limpieza automática de entidades remotas y blips tras 20 s sin reporte (y reenganche automático al volver)
+                if (remoteBlipHandle_[i] > 0 && gtaSymbols_.cradarClearBlipFn) {
+                    gtaSymbols_.cradarClearBlipFn(remoteBlipHandle_[i]);
+                }
+                remoteBlipHandle_[i] = -1;
+                remoteBlipColor_[i] = -1;
+                if (remotePedPtr_[i] != nullptr) {
+                    if (!gtaSymbols_.cpoolsGetPedFn || remotePedHandle_[i] <= 0 ||
+                        gtaSymbols_.cpoolsGetPedFn(remotePedHandle_[i]) == remotePedPtr_[i]) {
+                        evictNpcPedFromWorld(remotePedPtr_[i], localPed);
+                    }
+                    remotePedPtr_[i] = nullptr;
+                    remotePedHandle_[i] = -1;
+                    remotePedSpawnedModel_[i] = 0;
+                    remotePedAppliedSkinId_[i] = 0;
+                    remotePedEquippedWeapon_[i] = -1;
+                }
+                if (rem.lastNetworkUpdateMs > 0) {
+                    rem.isActive = false;
+                }
+                continue;
+            }
+            if (!rem.hasRealGtaCoords) continue;
 
             if (!initialSyncTeleportDone_ && gtaSymbols_.cpedTeleportFn) {
                 float dx = rem.x - me.x;
@@ -3557,15 +3656,31 @@ public:
                 void* remCurrentVeh = remCurrentlyInVeh ? *reinterpret_cast<void**>(remPedAddr + 0x708) : nullptr;
 
                 // Sincronizar modelo de skin del compañero remoto (soportando modelos normales y personajes especiales de historia)
+                // usando la secuencia segura DeleteRwObject + m_nModelIndex=0xFFFF + SetModelIndex para que el mesh 3D cambie siempre
                 if (rem.skinModelId > 0 && !remCurrentlyInVeh) {
                     bool remSkinLoaded = false;
                     int32_t targetRemModel = resolvePlayerSkinModelId(rem.skinModelId, i, (tickCount % 5 == 0), remSkinLoaded);
-                    if (targetRemModel > 0 && remSkinLoaded && remotePedSpawnedModel_[i] != targetRemModel && gtaSymbols_.cpedSetModelIndexFn) {
-                        gtaSymbols_.cpedSetModelIndexFn(ped, static_cast<uint32_t>(targetRemModel));
-                        remotePedSpawnedModel_[i] = targetRemModel;
-                        remotePedEquippedWeapon_[i] = -1; // Re-equipar arma tras cambio de modelo 3D
-                        LOGI("Updated 3D Remote Player P%d Skin (ped=%p, reqSkin=%d -> model=%d, isModelLoaded=1)",
-                             i + 1, ped, rem.skinModelId, targetRemModel);
+                    if (targetRemModel > 0 && remSkinLoaded &&
+                        (remotePedSpawnedModel_[i] != targetRemModel || remotePedAppliedSkinId_[i] != rem.skinModelId)) {
+                        uintptr_t rVtbl = *reinterpret_cast<uintptr_t*>(remPedAddr);
+                        if (rVtbl != 0) {
+                            uint32_t savedRemAnimGrp = *reinterpret_cast<uint32_t*>(remPedAddr + 0x630);
+                            using FnDeleteRwObject = void (*)(void*);
+                            using FnVtblSetModelIndex = void (*)(void*, uint32_t);
+                            auto deleteRwObjFn = *reinterpret_cast<FnDeleteRwObject*>(rVtbl + 0x48);
+                            auto setModelIdxFn = *reinterpret_cast<FnVtblSetModelIndex*>(rVtbl + 0x30);
+                            if (deleteRwObjFn && setModelIdxFn) {
+                                deleteRwObjFn(ped);
+                                *reinterpret_cast<uint16_t*>(remPedAddr + 0x32) = 0xFFFF;
+                                setModelIdxFn(ped, static_cast<uint32_t>(targetRemModel));
+                                *reinterpret_cast<uint32_t*>(remPedAddr + 0x630) = savedRemAnimGrp;
+                                remotePedSpawnedModel_[i] = targetRemModel;
+                                remotePedAppliedSkinId_[i] = rem.skinModelId;
+                                remotePedEquippedWeapon_[i] = -1; // Re-equipar arma tras cambio de modelo 3D
+                                LOGI("Updated 3D Remote Player P%d Skin (ped=%p, reqSkin=%d -> model=%d, isModelLoaded=1)",
+                                     i + 1, ped, rem.skinModelId, targetRemModel);
+                            }
+                        }
                     }
                 }
 
@@ -3848,10 +3963,17 @@ public:
                             if (gtaSymbols_.cpedSetPedPositionInCarFn) {
                                 gtaSymbols_.cpedSetPedPositionInCarFn(ped);
                             }
-                            // Activar CTaskSimpleGangDriveBy en el CCivilianPed remoto para que en la pantalla del conductor
-                            // el acompañante también saque medio cuerpo por la ventanilla y dispare como la IA
+                            // Activar CTaskSimpleGangDriveBy en el CCivilianPed remoto (modo 4 = AI_ALL_DIRECTIONS)
+                            // con punto objetivo proyectado para que en la pantalla del conductor el acompañante saque
+                            // medio cuerpo por la ventanilla y dispare como los miembros de la pandilla
                             uintptr_t remIntel = *reinterpret_cast<uintptr_t*>(remPedAddr + 0x538);
                             if (remIntel != 0 && (rem.isDriveByActive || (rem.weaponId >= 22 && rem.weaponId <= 34))) {
+                                float aimDist = 35.0f;
+                                CVector aimTarget{
+                                    targetRemX - std::sin(rem.heading) * aimDist,
+                                    targetRemY + std::cos(rem.heading) * aimDist,
+                                    targetRemZ + 0.5f
+                                };
                                 void* remSecTask = *reinterpret_cast<void**>(remIntel + 0x30);
                                 if (remSecTask == nullptr &&
                                     gtaSymbols_.ctaskOperatorNewFn &&
@@ -3860,16 +3982,19 @@ public:
                                     void* dbTask = gtaSymbols_.ctaskOperatorNewFn(0x60);
                                     if (dbTask) {
                                         bool seatRHS = (seatSlot == 0 || seatSlot == 2);
-                                        gtaSymbols_.ctaskSimpleGangDriveByCtorFn(dbTask, nullptr, nullptr, 1000.0f, 100, 8, seatRHS);
+                                        gtaSymbols_.ctaskSimpleGangDriveByCtorFn(dbTask, nullptr, &aimTarget, 1000.0f, 100, 4, seatRHS);
                                         gtaSymbols_.ctaskManagerSetTaskSecondaryFn(reinterpret_cast<void*>(remIntel + 0x08), dbTask, 0);
                                         remSecTask = *reinterpret_cast<void**>(remIntel + 0x30);
                                     }
                                 }
-                                if (remSecTask != nullptr && ((rem.animGroupId & 0x06u) != 0 || rem.isAiming != 0)) {
+                                if (remSecTask != nullptr) {
                                     uintptr_t rdbAddr = reinterpret_cast<uintptr_t>(remSecTask);
-                                    if (*reinterpret_cast<int8_t*>(rdbAddr + 0x17) <= 2) {
-                                        *reinterpret_cast<int8_t*>(rdbAddr + 0x17) = 2;
-                                        *reinterpret_cast<int16_t*>(rdbAddr + 0x1e) = 0;
+                                    *reinterpret_cast<CVector*>(rdbAddr + 0x50) = aimTarget;
+                                    if ((rem.animGroupId & 0x06u) != 0 || rem.isAiming != 0) {
+                                        if (*reinterpret_cast<int8_t*>(rdbAddr + 0x17) <= 2) {
+                                            *reinterpret_cast<int8_t*>(rdbAddr + 0x17) = 2;
+                                            *reinterpret_cast<int16_t*>(rdbAddr + 0x1e) = 0;
+                                        }
                                     }
                                 }
                             }
@@ -4037,6 +4162,33 @@ public:
                         }
                     }
 
+                    bool sendWorldCheatNow = pendingWorldCheatBroadcast_.exchange(false);
+                    bool sendWeaponFireNow = pendingWeaponFireBroadcast_.exchange(false);
+                    WorldCheatSyncPacket cheatPkt{};
+                    if (sendWorldCheatNow) {
+                        std::string cheatCopy;
+                        {
+                            std::lock_guard<std::mutex> lock(mutex_);
+                            cheatCopy = lastWorldCheatSynced_;
+                        }
+                        if (!cheatCopy.empty()) {
+                            cheatPkt = buildWorldCheatSyncPacket(mySlot, cheatCopy);
+                        } else {
+                            sendWorldCheatNow = false;
+                        }
+                    }
+                    WeaponFirePacket firePkt{};
+                    if (sendWeaponFireNow) {
+                        int idx = std::clamp(mySlot, 1, kMaxCoopPlayers) - 1;
+                        CVector orig{players_[idx].x, players_[idx].y, players_[idx].z + 0.6f};
+                        CVector targ{
+                            orig.x - std::sin(players_[idx].heading) * 35.0f,
+                            orig.y + std::cos(players_[idx].heading) * 35.0f,
+                            orig.z
+                        };
+                        firePkt = buildWeaponFirePacket(mySlot, players_[idx].weaponId, orig, targ);
+                    }
+
                     for (const auto& dest : peersCopy) {
                         ::sendto(sock, &pedPkt, sizeof(pedPkt), 0, reinterpret_cast<const sockaddr*>(&dest), sizeof(dest));
                         int idx = std::clamp(mySlot, 1, kMaxCoopPlayers) - 1;
@@ -4053,6 +4205,12 @@ public:
                         if ((gtaSymbols_.cutsceneRunning && *gtaSymbols_.cutsceneRunning != 0) || cutsceneSkipVotesMask_ != 0) {
                             CutsceneSyncPacket csPkt = buildCutsceneSyncPacket(mySlot);
                             ::sendto(sock, &csPkt, sizeof(csPkt), 0, reinterpret_cast<const sockaddr*>(&dest), sizeof(dest));
+                        }
+                        if (sendWorldCheatNow) {
+                            ::sendto(sock, &cheatPkt, sizeof(cheatPkt), 0, reinterpret_cast<const sockaddr*>(&dest), sizeof(dest));
+                        }
+                        if (sendWeaponFireNow) {
+                            ::sendto(sock, &firePkt, sizeof(firePkt), 0, reinterpret_cast<const sockaddr*>(&dest), sizeof(dest));
                         }
                     }
 
@@ -4761,11 +4919,17 @@ public:
         std::string code = trim(rawCode);
         for (char& c : code) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
         if (code == "HESOYAM" || code == "LXGIWYL" || code == "KJKSZPJ" || code == "UZUMYMW" ||
-            code == "AEZAKMI" || code == "ASNAEB" || code == "BAGUVIX" || code == "FULLCLIP") {
+            code == "ROCKETMAN" || code == "AEZAKMI" || code == "OSRBLHH" ||
+            code == "ASNAEB" || code == "BAGUVIX" || code == "FULLCLIP") {
             return static_cast<int>(CHEAT_LOCAL_ONLY);
+        }
+        if (code == "AIWPRTON" || code == "JUMPJET" || code == "OHDUDE" ||
+            code == "PDNEJOH" || code == "FOURWHEELFUN") {
+            return static_cast<int>(CHEAT_VEHICLE_SPAWN);
         }
         std::lock_guard<std::mutex> lock(mutex_);
         lastWorldCheatSynced_ = code;
+        pendingWorldCheatBroadcast_.store(true, std::memory_order_relaxed);
         return static_cast<int>(CHEAT_WORLD_SHARED);
     }
 
@@ -4955,12 +5119,10 @@ public:
                                       std::fabs(ry) > 0.1f && std::fabs(ry) <= 2.5f);
         if (bSphere == 0 && !isSmallMissionTrigger) return;
 
-        // Permitir sincronización de marcador en Free Roam ($ONMISSION == 0) y también en el marcador rojo
-        // de llegada a la casa de CJ en Grove Street (2495, -1686) al final del prólogo de las BMX
-        bool isGroveHouseIntroTrigger = (std::fabs(targetX - 2495.0f) < 32.0f &&
-                                         std::fabs(targetY - (-1686.0f)) < 32.0f &&
-                                         std::fabs(rx) <= 4.5f && std::fabs(ry) <= 4.5f);
-        if (onMission && !isGroveHouseIntroTrigger) return;
+        // Jamás interceptar LOCATE_CHAR_* mientras una misión ya está activa ($ONMISSION != 0)
+        // ni cuando el compañero ya disparó el inicio de la misión (mission_.onMissionFlag != 0),
+        // para nunca tildar cámaras fijas ni bloquear al segundo jugador al entrar a la misma misión
+        if (onMission || mission_.onMissionFlag != 0) return;
 
         uintptr_t scriptAddr = reinterpret_cast<uintptr_t>(selfScript);
         uint8_t condResult = *reinterpret_cast<uint8_t*>(scriptAddr + 0x115);
@@ -5002,6 +5164,7 @@ public:
 
     bool canStartMissionTogether() {
 #if defined(__unix__) || defined(__ANDROID__) || defined(__linux__)
+        if (mission_.onMissionFlag != 0) return true;
         uint64_t nowMs = currentTimeMillis();
         int localIdx = std::clamp(config_.localPlayerSlot, 1, kMaxCoopPlayers) - 1;
         const PlayerState3D& me = players_[localIdx];
@@ -5067,6 +5230,12 @@ public:
             }
         }
 #endif
+    }
+
+    bool shouldForcePassengerFire(void* ped) const {
+        return ped != nullptr &&
+               ped == localPassengerDriveByPed_.load(std::memory_order_relaxed) &&
+               localPassengerDriveByFiring_.load(std::memory_order_relaxed);
     }
 
 private:
@@ -5458,8 +5627,14 @@ private:
     std::atomic<bool> pendingAntiSoftlock_{false};
     std::atomic<bool> pendingJoinInProgressSync_{false};
     std::atomic<bool> pendingMissionMeetupTeleport_{false};
+    std::atomic<bool> localPassengerDriveByFiring_{false};
+    std::atomic<void*> localPassengerDriveByPed_{nullptr};
+    std::atomic<bool> pendingWorldCheatBroadcast_{false};
+    std::atomic<bool> pendingWeaponFireBroadcast_{false};
     bool lastLocalOnMission_ = false;
     int32_t localAppliedSkinModel_ = 0;
+    int32_t localAppliedSkinReqId_ = 0;
+    int32_t remotePedAppliedSkinId_[kMaxCoopPlayers] = {0, 0, 0, 0};
     std::thread udpWorkerThread_;
     GtaSaNativeSymbols gtaSymbols_;
     BridgeConfig config_;
@@ -5587,6 +5762,13 @@ static bool Hooked_CCutsceneMgr_IsSkipButtonPressed() {
         ? g_origCCutsceneMgrIsSkipPressed()
         : false;
     return CoopEngineBridge::instance().onCutsceneSkipButtonCheck(localPressed);
+}
+
+static uint8_t Hooked_CPad_GetWeapon(void* selfPad, void* ped, bool bCheckWeapon) {
+    if (CoopEngineBridge::instance().shouldForcePassengerFire(ped)) {
+        return 1u;
+    }
+    return g_origCPadGetWeapon ? g_origCPadGetWeapon(selfPad, ped, bCheckWeapon) : 0u;
 }
 
 } // namespace coopandreas

@@ -480,6 +480,48 @@ fun ActiveMissionOverlay(
                 }
             }
 
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Botones tácticos de Project Kaizo (RF-08): Faro de Respawn Táctico y Compartir Arma
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedButton(
+                    onClick = { viewModel.coopNetworkManager.setTacticalRespawnBeacon() },
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(40.dp)
+                        .testTag("tactical_respawn_button"),
+                    shape = RoundedCornerShape(10.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, GroveGreen)
+                ) {
+                    Text(
+                        text = "📍 Faro Respawn",
+                        fontFamily = BebasNeueFontFamily,
+                        fontSize = 13.sp,
+                        color = GroveGreen
+                    )
+                }
+
+                OutlinedButton(
+                    onClick = { viewModel.coopNetworkManager.shareWeaponWithPartner() },
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(40.dp)
+                        .testTag("share_weapon_button"),
+                    shape = RoundedCornerShape(10.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, SanAndreasGold)
+                ) {
+                    Text(
+                        text = "🔫 Compartir Arma",
+                        fontFamily = BebasNeueFontFamily,
+                        fontSize = 13.sp,
+                        color = SanAndreasGold
+                    )
+                }
+            }
+
             Spacer(modifier = Modifier.height(10.dp))
 
             var showCheatsPanel by remember { mutableStateOf(false) }

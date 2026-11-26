@@ -595,7 +595,20 @@ class ModFileManager(private val context: Context) {
                     } else if (file.name.equals("SAMP", ignoreCase = true)) {
                         file.copyRecursively(standardSampDir, overwrite = true)
                     } else if (file.name.equals("mods", ignoreCase = true)) {
-                        file.copyRecursively(standardModsDir, overwrite = true)
+                        file.listFiles()?.forEach { child ->
+                            if (!child.isDirectory) {
+                                if (child.name.equals("cleomod.so", ignoreCase = true) ||
+                                    child.name.equals("net.rusjj.cleomod.so", ignoreCase = true) ||
+                                    child.name.equals("libSAUtils.so", ignoreCase = true)
+                                ) {
+                                    return@forEach
+                                }
+                                if (child.name.equals("libCLEOMod.so", ignoreCase = true) && child.length() < 700_000L) {
+                                    return@forEach
+                                }
+                                child.copyTo(File(standardModsDir, child.name), overwrite = true)
+                            }
+                        }
                     }
                 }
             } catch (_: Exception) {}
@@ -1277,13 +1290,11 @@ class ModFileManager(private val context: Context) {
         }
         try {
             val dest = File(modsDir, "libCLEOMod.so")
-            if (dest.exists() && dest.length() > 600_000L) return
-            if (tryRestore64BitCleoFromDeviceZips(dest)) return
-            if (!dest.exists()) {
-                context.assets.open("cleo/libCLEOMod.so").use { input ->
-                    FileOutputStream(dest).use { out -> input.copyTo(out) }
-                }
+            if (dest.exists() && dest.length() >= 700_000L) return
+            if (dest.exists() && dest.length() < 700_000L) {
+                try { dest.delete() } catch (_: Exception) {}
             }
+            if (tryRestore64BitCleoFromDeviceZips(dest)) return
         } catch (_: Exception) {}
     }
 

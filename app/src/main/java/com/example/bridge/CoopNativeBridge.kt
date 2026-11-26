@@ -395,8 +395,10 @@ object CoopNativeBridge {
             } catch (_: Throwable) {}
         }
         return when (normalized) {
-            "HESOYAM", "LXGIWYL", "KJKSZPJ", "UZUMYMW", "AEZAKMI", "ASNAEB", "BAGUVIX", "FULLCLIP" ->
+            "HESOYAM", "LXGIWYL", "KJKSZPJ", "UZUMYMW", "ROCKETMAN", "AEZAKMI", "OSRBLHH", "ASNAEB", "BAGUVIX", "FULLCLIP" ->
                 CheatSyncCategory.LOCAL_ONLY
+            "AIWPRTON", "JUMPJET", "OHDUDE", "PDNEJOH", "FOURWHEELFUN" ->
+                CheatSyncCategory.VEHICLE_SPAWN
             else -> CheatSyncCategory.WORLD_SHARED
         }
     }
