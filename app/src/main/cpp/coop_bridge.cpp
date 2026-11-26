@@ -4172,7 +4172,7 @@ public:
                             cheatCopy = lastWorldCheatSynced_;
                         }
                         if (!cheatCopy.empty()) {
-                            cheatPkt = buildWorldCheatSyncPacket(mySlot, cheatCopy);
+                            cheatPkt = buildWorldCheatSyncPacket(mySlot, cheatCopy, CHEAT_WORLD_SHARED);
                         } else {
                             sendWorldCheatNow = false;
                         }
@@ -4180,13 +4180,10 @@ public:
                     WeaponFirePacket firePkt{};
                     if (sendWeaponFireNow) {
                         int idx = std::clamp(mySlot, 1, kMaxCoopPlayers) - 1;
-                        CVector orig{players_[idx].x, players_[idx].y, players_[idx].z + 0.6f};
-                        CVector targ{
-                            orig.x - std::sin(players_[idx].heading) * 35.0f,
-                            orig.y + std::cos(players_[idx].heading) * 35.0f,
-                            orig.z
-                        };
-                        firePkt = buildWeaponFirePacket(mySlot, players_[idx].weaponId, orig, targ);
+                        float targX = players_[idx].x - std::sin(players_[idx].heading) * 35.0f;
+                        float targY = players_[idx].y + std::cos(players_[idx].heading) * 35.0f;
+                        float targZ = players_[idx].z + 0.6f;
+                        firePkt = buildWeaponFirePacket(mySlot, players_[idx].weaponId, targX, targY, targZ);
                     }
 
                     for (const auto& dest : peersCopy) {
