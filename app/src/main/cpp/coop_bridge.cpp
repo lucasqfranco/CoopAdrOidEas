@@ -1129,7 +1129,9 @@ public:
     void applySmoothPedTransformAndAnim(
         void* ped, float targetX, float targetY, float targetZ,
         float vx, float vy, float vz, float heading, int moveState, float health,
-        uint64_t lastNetworkUpdateMs = 0, bool isCrouching = false
+        uint64_t lastNetworkUpdateMs = 0, bool isCrouching = false,
+        float* smoothX = nullptr, float* smoothY = nullptr, float* smoothZ = nullptr,
+        bool* smoothValid = nullptr, float* lastRelinkX = nullptr, float* lastRelinkY = nullptr
     ) {
 #if defined(__unix__) || defined(__ANDROID__) || defined(__linux__)
         if (!ped) return;
@@ -1162,18 +1164,26 @@ public:
             }
         }
 
-        // a) Predicción dead-reckoning suave entre paquetes de 60 Hz
+        // a) Predicción dead-reckoning conservadora (sin diente de sierra al llegar paquetes)
+        float speed2d = std::sqrt(vx * vx + vy * vy);
         uint64_t nowMs = currentTimeMillis();
         float dtSec = (lastNetworkUpdateMs > 0 && nowMs > lastNetworkUpdateMs)
-            ? std::clamp(static_cast<float>(nowMs - lastNetworkUpdateMs) * 0.001f, 0.0f, 0.05f)
+            ? std::clamp(static_cast<float>(nowMs - lastNetworkUpdateMs) * 0.001f, 0.0f, 0.025f)
             : 0.0f;
-        float predX = targetX + vx * dtSec * 50.0f;
-        float predY = targetY + vy * dtSec * 50.0f;
+        float leadScale = (speed2d > 0.03f) ? (dtSec * 25.0f) : 0.0f;
+        float predX = targetX + vx * leadScale;
+        float predY = targetY + vy * leadScale;
         float predZ = targetZ;
 
         uintptr_t mat = *reinterpret_cast<uintptr_t*>(pedAddr + 0x18);
         float curX = predX, curY = predY, curZ = predZ;
-        if (mat != 0) {
+        if (smoothValid && *smoothValid && smoothX && smoothY && smoothZ) {
+            // Interpolar desde nuestra propia posición suavizada (inmune a rebotes de gravedad/colisión
+            // y root-motion que CWorld::Process aplicó justo antes en este frame)
+            curX = *smoothX;
+            curY = *smoothY;
+            curZ = *smoothZ;
+        } else if (mat != 0) {
             curX = *reinterpret_cast<float*>(mat + 0x30);
             curY = *reinterpret_cast<float*>(mat + 0x34);
             curZ = *reinterpret_cast<float*>(mat + 0x38);
@@ -1184,7 +1194,6 @@ public:
         float dz = predZ - curZ;
         float distSq = dx * dx + dy * dy + dz * dz;
 
-        float speed2d = std::sqrt(vx * vx + vy * vy);
         int effectiveMoveState = moveState;
         if (effectiveMoveState != 4 && effectiveMoveState != 6 && effectiveMoveState != 7) {
             if (speed2d > 0.14f) effectiveMoveState = 7;       // PEDMOVE_SPRINT
@@ -1194,15 +1203,28 @@ public:
         }
 
         if (mat != 0) {
-            float alphaXY = (distSq > 25.0f) ? 1.0f : ((effectiveMoveState >= 4 && distSq < 6.0f) ? 0.38f : 0.50f);
-            float alphaZ = (distSq > 25.0f) ? 1.0f : ((std::fabs(dz) < 0.45f && std::fabs(vz) < 0.05f) ? 0.15f : 0.45f);
+            float alphaXY = (distSq > 20.0f) ? 1.0f : ((speed2d > 0.02f) ? 0.42f : 0.60f);
+            float alphaZ = (distSq > 20.0f) ? 1.0f : ((std::fabs(dz) < 0.8f && std::fabs(vz) < 0.06f) ? 0.85f : 0.70f);
             float nextX = curX + dx * alphaXY;
             float nextY = curY + dy * alphaXY;
             float nextZ = curZ + dz * alphaZ;
+            if (smoothX && smoothY && smoothZ && smoothValid) {
+                *smoothX = nextX;
+                *smoothY = nextY;
+                *smoothZ = nextZ;
+                *smoothValid = true;
+            }
 
-            // b) ANTI-SALTO EN Z: solo reinsertar en sectores de CWorld si distSq >= 4.0f o cada 15 ticks
-            // para evitar que CWorld::Add dispare impulsos verticales de colisión en cada frame
-            bool needWorldSectorRelink = (distSq >= 4.0f) || ((mainThreadTicks_.load() % 15) == 0);
+            // b) ANTI-SALTO EN Z: solo reinsertar en sectores de CWorld si realmente se desplazó > 4m
+            // (jamás con timer periódico % 15 que reinicia el estado de colisión y provoca micro-saltos)
+            bool needWorldSectorRelink = (distSq >= 9.0f);
+            if (!needWorldSectorRelink && lastRelinkX && lastRelinkY) {
+                float rdx = nextX - *lastRelinkX;
+                float rdy = nextY - *lastRelinkY;
+                if ((rdx * rdx + rdy * rdy) >= (4.0f * 4.0f)) {
+                    needWorldSectorRelink = true;
+                }
+            }
             if (needWorldSectorRelink && gtaSymbols_.cworldRemoveFn) {
                 gtaSymbols_.cworldRemoveFn(ped);
             }
@@ -1218,7 +1240,7 @@ public:
             if (std::isfinite(heading)) {
                 float curH = *reinterpret_cast<float*>(pedAddr + 0x6c4);
                 float diffH = std::isfinite(curH) ? std::atan2(std::sin(heading - curH), std::cos(heading - curH)) : 0.0f;
-                float smoothH = (distSq > 25.0f || !std::isfinite(curH)) ? heading : (curH + diffH * 0.40f);
+                float smoothH = (distSq > 20.0f || !std::isfinite(curH)) ? heading : (curH + diffH * 0.42f);
                 float c = std::cos(smoothH);
                 float s = std::sin(smoothH);
                 *reinterpret_cast<float*>(mat + 0x00) = c;
@@ -1245,6 +1267,10 @@ public:
             }
             if (needWorldSectorRelink && gtaSymbols_.cworldAddFn) {
                 gtaSymbols_.cworldAddFn(ped);
+                if (lastRelinkX && lastRelinkY) {
+                    *lastRelinkX = nextX;
+                    *lastRelinkY = nextY;
+                }
             }
         }
 
@@ -1312,9 +1338,6 @@ public:
         uintptr_t mat = *reinterpret_cast<uintptr_t*>(vehAddr + 0x18);
         if (mat == 0 || !gtaSymbols_.cworldRemoveFn || !gtaSymbols_.cworldAddFn) return;
 
-        if (ve.packedColors != 0) {
-            *reinterpret_cast<uint32_t*>(vehAddr + 0x574) = ve.packedColors;
-        }
         applyVehicleDamageState(
             veh, ve.vehicleHealth,
             ve.damageWheels, ve.damageDoorsLow, ve.damageDoorsHigh, ve.damageLights, ve.damagePanels
@@ -3295,7 +3318,7 @@ public:
                             int32_t vPoolSize = *reinterpret_cast<int32_t*>(vPoolAddr + 0x10);
                             if (vObjects && vByteMap && vPoolSize > 0 && vPoolSize <= 256) {
                                 void* adoptableVeh = nullptr;
-                                float bestAdoptDistSq = 22.0f * 22.0f;
+                                float bestAdoptScore = 7.5f * 7.5f;
                                 for (int32_t s = 0; s < vPoolSize; ++s) {
                                     if ((vByteMap[s] & 0x80) != 0) continue;
                                     void* candVeh = reinterpret_cast<void*>(vObjects + static_cast<size_t>(s) * 0xc68);
@@ -3316,8 +3339,10 @@ public:
                                         float cdx = *reinterpret_cast<float*>(cvMat + 0x30) - ve.x;
                                         float cdy = *reinterpret_cast<float*>(cvMat + 0x34) - ve.y;
                                         float dSq = cdx * cdx + cdy * cdy;
-                                        if (dSq < bestAdoptDistSq) {
-                                            bestAdoptDistSq = dSq;
+                                        uint32_t cvColors = *reinterpret_cast<uint32_t*>(cvAddr + 0x574);
+                                        float score = dSq + ((ve.packedColors != 0 && cvColors != ve.packedColors) ? 16.0f : 0.0f);
+                                        if (dSq < (7.5f * 7.5f) && score < bestAdoptScore) {
+                                            bestAdoptScore = score;
                                             adoptableVeh = candVeh;
                                         }
                                     }
@@ -3443,8 +3468,12 @@ public:
                             ve.damageDoorsLow, ve.damageDoorsHigh, ve.damageLights, ve.damagePanels
                         );
                     }
-                    if (wVeh != myVeh && ve.packedColors != 0) {
-                        *reinterpret_cast<uint32_t*>(wVehAddr + 0x574) = ve.packedColors;
+                    if (wVeh != myVeh && worldSyncVehSpawnedByUs_[v] &&
+                        worldSyncVehHostSlot_[v] == ve.hostPoolSlot && ve.packedColors != 0) {
+                        uint32_t curColors = *reinterpret_cast<uint32_t*>(wVehAddr + 0x574);
+                        if (curColors != ve.packedColors) {
+                            *reinterpret_cast<uint32_t*>(wVehAddr + 0x574) = ve.packedColors;
+                        }
                     }
 
                     uintptr_t wvMat = *reinterpret_cast<uintptr_t*>(wVehAddr + 0x18);
@@ -3981,6 +4010,7 @@ public:
                         uintptr_t tvAddr = reinterpret_cast<uintptr_t>(targetVeh);
                         void* currentDrv = *reinterpret_cast<void**>(tvAddr + 0x5a0);
                         if (rem.seatIndex == 0 && currentDrv != localPed) {
+                            remotePedSmoothValid_[i] = false;
                             if (!remCurrentlyInVeh || remCurrentVeh != targetVeh || currentDrv != ped) {
                                 if (remCurrentlyInVeh && remCurrentVeh != targetVeh) {
                                     warpPedOutOfVehicle(ped);
@@ -4033,11 +4063,14 @@ public:
                                     ped, rx, ry, rz,
                                     rem.vx, rem.vy, rem.vz, rem.heading,
                                     1, 200.0f, rem.lastNetworkUpdateMs,
-                                    rem.isCrouching != 0
+                                    rem.isCrouching != 0,
+                                    &remotePedSmoothX_[i], &remotePedSmoothY_[i], &remotePedSmoothZ_[i],
+                                    &remotePedSmoothValid_[i], &remotePedLastRelinkX_[i], &remotePedLastRelinkY_[i]
                                 );
                             }
                         } else {
                             // Compañero remoto como pasajero (o ambos en el mismo auto donde localPed es conductor)
+                            remotePedSmoothValid_[i] = false;
                             int seatSlot = std::clamp<int>((rem.seatIndex > 0) ? (rem.seatIndex - 1) : 0, 0, 2);
                             void* curSeatPed = *reinterpret_cast<void**>(tvAddr + 0x5a8 + static_cast<size_t>(seatSlot) * 8);
                             if (!remCurrentlyInVeh || remCurrentVeh != targetVeh || curSeatPed != ped) {
@@ -4090,18 +4123,23 @@ public:
                             ped, targetRemX, targetRemY, targetRemZ,
                             rem.vx, rem.vy, rem.vz, rem.heading,
                             static_cast<int>(rem.animId), 200.0f, rem.lastNetworkUpdateMs,
-                            rem.isCrouching != 0
+                            rem.isCrouching != 0,
+                            &remotePedSmoothX_[i], &remotePedSmoothY_[i], &remotePedSmoothZ_[i],
+                            &remotePedSmoothValid_[i], &remotePedLastRelinkX_[i], &remotePedLastRelinkY_[i]
                         );
                     }
                 } else {
                     if (remCurrentlyInVeh) {
                         warpPedOutOfVehicle(ped);
+                        remotePedSmoothValid_[i] = false;
                     }
                     applySmoothPedTransformAndAnim(
                         ped, targetRemX, targetRemY, targetRemZ,
                         rem.vx, rem.vy, rem.vz, rem.heading,
                         static_cast<int>(rem.animId), 200.0f, rem.lastNetworkUpdateMs,
-                        rem.isCrouching != 0
+                        rem.isCrouching != 0,
+                        &remotePedSmoothX_[i], &remotePedSmoothY_[i], &remotePedSmoothZ_[i],
+                        &remotePedSmoothValid_[i], &remotePedLastRelinkX_[i], &remotePedLastRelinkY_[i]
                     );
                     void* remClump = *reinterpret_cast<void**>(remPedAddr + 0x20);
                     if (remClump != nullptr) {
@@ -5746,6 +5784,12 @@ private:
     int remotePedSpawnedModel_[kMaxCoopPlayers] = {0};
     int32_t specialSlotRequestedSkin_[kMaxCoopPlayers] = {-1, -1, -1, -1};
     bool remoteWasJumping_[kMaxCoopPlayers] = {false, false, false, false};
+    bool remotePedSmoothValid_[kMaxCoopPlayers] = {false, false, false, false};
+    float remotePedSmoothX_[kMaxCoopPlayers] = {0.0f, 0.0f, 0.0f, 0.0f};
+    float remotePedSmoothY_[kMaxCoopPlayers] = {0.0f, 0.0f, 0.0f, 0.0f};
+    float remotePedSmoothZ_[kMaxCoopPlayers] = {0.0f, 0.0f, 0.0f, 0.0f};
+    float remotePedLastRelinkX_[kMaxCoopPlayers] = {0.0f, 0.0f, 0.0f, 0.0f};
+    float remotePedLastRelinkY_[kMaxCoopPlayers] = {0.0f, 0.0f, 0.0f, 0.0f};
     int32_t remotePedEquippedWeapon_[kMaxCoopPlayers] = {-1, -1, -1, -1};
     int remoteBlipHandle_[kMaxCoopPlayers] = {-1, -1, -1, -1};
     int remoteBlipColor_[kMaxCoopPlayers] = {-1, -1, -1, -1};
