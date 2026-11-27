@@ -1954,6 +1954,19 @@ public:
             me.isAiming = ((combatFlags & 0x02u) != 0) ? 1u : 0u;
         }
 
+        // Detectar si una cinemática in-engine guionada por misión controla la cámara (MODE_FIXED = 14, ej. salida en auto de "Big Smoke")
+        bool isScriptedCutsceneCam = false;
+        if (gtaSymbols_.theCamera != nullptr) {
+            uintptr_t camBase = reinterpret_cast<uintptr_t>(gtaSymbols_.theCamera);
+            uint8_t activeCamIdx = *reinterpret_cast<uint8_t*>(camBase + 0x5f);
+            if (activeCamIdx < 3) {
+                uint16_t curCamMode = *reinterpret_cast<uint16_t*>(camBase + static_cast<size_t>(activeCamIdx) * 0x228 + 0x186);
+                if (curCamMode == 14 /*MODE_FIXED*/) {
+                    isScriptedCutsceneCam = true;
+                }
+            }
+        }
+
         // Detectar si el jugador local a pie tiene una tarea activa de entrada/robo de vehículo:
         // En libGTASA.so arm64 v2.10: 700 = CTaskComplexEnterCarAsPassenger, 701 = CTaskComplexEnterCarAsDriver, 713 = EnterCarAsDriverTimed
         bool localTryingToEnterCar = false;
@@ -1973,7 +1986,9 @@ public:
                     localEnteringAsDriver = true;
                 }
             }
-            if (localEnteringAsDriver && !localAlreadyEnteringAsPassenger) {
+            // Jamás interceptar la entrada al asiento del conductor durante una cinemática in-engine guionada (MODE_FIXED = 14)
+            // para no romper secuencias donde el script mete a CJ de conductor (ej. Perennial de "Big Smoke")
+            if (localEnteringAsDriver && !localAlreadyEnteringAsPassenger && !isScriptedCutsceneCam) {
                 for (int r = 0; r < kMaxCoopPlayers; ++r) {
                     if (r == localIdx || !players_[r].isActive || players_[r].seatIndex != 0) continue;
                     void* partnerVeh = nullptr;
@@ -3068,7 +3083,7 @@ public:
             // solicitados por RequestModel de forma asíncrona y segura en el siguiente frame.
             bool canRequestStreamingThisTick = (tickCount % 5 == 0);
             uint8_t guestAreaCode = *reinterpret_cast<uint8_t*>(localPedAddr + 0x4b);
-            if (guestAreaCode == 0) {
+            if (guestAreaCode == 0 && !isScriptedCutsceneCam) {
 
             // 1. Instanciar y actualizar en el Guest los peatones reales sincronizados desde el Host (sólo si están a <= 110m del Guest
             //    para jamás instanciar MISSION_CHAR en sectores descargados del mapa que degradarían el streaming del entorno)
@@ -3908,6 +3923,15 @@ public:
                         static_cast<int>(rem.animId), 200.0f, rem.lastNetworkUpdateMs,
                         rem.isCrouching != 0
                     );
+                    continue;
+                }
+
+                // Durante una cinemática in-engine guionada (MODE_FIXED = 14, ej. salida en auto de "Big Smoke"),
+                // no subir ni posicionar al actor remoto dentro/delante del vehículo guionado para jamás trabar la secuencia
+                if (isScriptedCutsceneCam) {
+                    if (remCurrentlyInVeh) {
+                        warpPedOutOfVehicle(ped);
+                    }
                     continue;
                 }
 
