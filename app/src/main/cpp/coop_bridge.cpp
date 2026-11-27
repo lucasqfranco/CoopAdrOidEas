@@ -2301,23 +2301,30 @@ public:
                             void* dbTask = gtaSymbols_.ctaskOperatorNewFn(0x60);
                             if (dbTask) {
                                 bool seatRHS = (me.seatIndex == 1 || me.seatIndex == 3);
-                                gtaSymbols_.ctaskSimpleGangDriveByCtorFn(dbTask, nullptr, nullptr, 1000.0f, 100, 8, seatRHS);
+                                CVector initAim{
+                                    myPos.x - std::sin(myHeading) * 35.0f,
+                                    myPos.y + std::cos(myHeading) * 35.0f,
+                                    myPos.z + 0.5f
+                                };
+                                // Estilo 4 (DRIVEBY_FIXED_LHS/RHS / Gang Drive-By): permite apuntar libremente hacia m_vecTargetCoors
+                                // sin exigir MODE_AIMWEAPON_FROMCAR (55) en TheCamera
+                                gtaSymbols_.ctaskSimpleGangDriveByCtorFn(dbTask, nullptr, &initAim, 1000.0f, 100, 4, seatRHS);
                                 gtaSymbols_.ctaskManagerSetTaskSecondaryFn(reinterpret_cast<void*>(localIntel + 0x08), dbTask, 0);
                                 secAttackTask = *reinterpret_cast<void**>(localIntel + 0x30);
-                                LOGI("Enabled Passenger Drive-By (CTaskSimpleGangDriveBy) on localPed=%p seat=%d wep=%d",
+                                LOGI("Enabled Passenger Drive-By (CTaskSimpleGangDriveBy style=4) on localPed=%p seat=%d wep=%d",
                                      localPed, me.seatIndex, me.weaponId);
                             }
                         }
-                        // NO sobrescribir TheCamera->m_nMode = 55 (MODE_AIMWEAPON_FROMCAR): en GTA SA Mobile ese modo
-                        // bloquea la cámara del pasajero y oculta/conflicta con los controles táctiles normales.
-                        // Dejamos la cámara libre de seguimiento 360° y mostramos ÚNICAMENTE el botón nativo de ataque (WIDGET_ATTACK=0).
+                        // En GTA SA Mobile (CTouchInterface::WidgetIDs): 0=WIDGET_ENTER_CAR, 1=WIDGET_ATTACK, 11=WIDGET_CAR_SHOOT, 16/17=SHOOT_LEFT/RIGHT
+                        // Habilitamos ÚNICAMENTE WIDGET_ATTACK (1) para que aparezca el botón nativo de disparo sin superponer controles
                         bool manualFirePressed = false;
                         if (gtaSymbols_.ctouchInterfaceIsHeldDownFn) {
-                            if (gtaSymbols_.ctouchInterfaceIsHeldDownFn(0 /*WIDGET_ATTACK*/, 1)) manualFirePressed = true;
-                            if (gtaSymbols_.ctouchInterfaceIsHeldDownFn(10 /*WIDGET_VEHICLE_SHOOT_LEFT*/, 0)) manualFirePressed = true;
-                            if (gtaSymbols_.ctouchInterfaceIsHeldDownFn(11 /*WIDGET_VEHICLE_SHOOT_RIGHT*/, 0)) manualFirePressed = true;
+                            if (gtaSymbols_.ctouchInterfaceIsHeldDownFn(1 /*WIDGET_ATTACK*/, 1)) manualFirePressed = true;
+                            if (gtaSymbols_.ctouchInterfaceIsHeldDownFn(11 /*WIDGET_CAR_SHOOT*/, 0)) manualFirePressed = true;
+                            if (gtaSymbols_.ctouchInterfaceIsHeldDownFn(16 /*WIDGET_VEHICLE_SHOOT_LEFT*/, 0)) manualFirePressed = true;
+                            if (gtaSymbols_.ctouchInterfaceIsHeldDownFn(17 /*WIDGET_VEHICLE_SHOOT_RIGHT*/, 0)) manualFirePressed = true;
                         } else if (gtaSymbols_.ctouchInterfaceIsTouchedFn) {
-                            if (gtaSymbols_.ctouchInterfaceIsTouchedFn(0 /*WIDGET_ATTACK*/, nullptr, 1)) manualFirePressed = true;
+                            if (gtaSymbols_.ctouchInterfaceIsTouchedFn(1 /*WIDGET_ATTACK*/, nullptr, 1)) manualFirePressed = true;
                         }
                         localPassengerDriveByPed_.store(localPed, std::memory_order_relaxed);
                         localPassengerDriveByFiring_.store(manualFirePressed, std::memory_order_relaxed);
@@ -2353,19 +2360,24 @@ public:
                             if (curDbAnim < 231 || curDbAnim > 238) {
                                 *reinterpret_cast<int32_t*>(dbAddr + 0x2c) = seatRHS ? 236 /*DRIVEBY_RHS*/ : 232 /*DRIVEBY_LHS*/;
                             }
+                            // Garantizar que m_pWeaponInfo (+0x40) esté poblado con el arma actual del pasajero
+                            void* dbWepInfo = *reinterpret_cast<void**>(dbAddr + 0x40);
+                            if (dbWepInfo == nullptr && gtaSymbols_.cweaponInfoGetWeaponInfoFn) {
+                                dbWepInfo = gtaSymbols_.cweaponInfoGetWeaponInfoFn(me.weaponId, 1);
+                                *reinterpret_cast<void**>(dbAddr + 0x40) = dbWepInfo;
+                            }
+                            // Apuntar continuamente el torso/arma hacia donde mira la cámara 360°
+                            if (dbWepInfo != nullptr && gtaSymbols_.ctaskSimpleGangDriveByAimGunFn) {
+                                gtaSymbols_.ctaskSimpleGangDriveByAimGunFn(secAttackTask, localPed);
+                            }
                             if (manualFirePressed) {
                                 int8_t curSubState = *reinterpret_cast<int8_t*>(dbAddr + 0x17);
                                 if (curSubState <= 2) {
                                     *reinterpret_cast<int8_t*>(dbAddr + 0x17) = 2;
                                     *reinterpret_cast<int16_t*>(dbAddr + 0x1e) = 0;
                                 }
-                                // Invocar AimGun + FireGun nativos de CTaskSimpleGangDriveBy con cadencia segura para garantizar disparo real
-                                // aun si CCamera::Process revierte el modo de cámara del vehículo
-                                void* dbWepInfo = *reinterpret_cast<void**>(dbAddr + 0x40);
+                                // Disparar balas reales con FireGun al mantener el botón WIDGET_ATTACK (1)
                                 if (dbWepInfo != nullptr) {
-                                    if (gtaSymbols_.ctaskSimpleGangDriveByAimGunFn) {
-                                        gtaSymbols_.ctaskSimpleGangDriveByAimGunFn(secAttackTask, localPed);
-                                    }
                                     int64_t fireInterval = (me.weaponId == 28 || me.weaponId == 29 || me.weaponId == 32) ? 5 : 10;
                                     if (gtaSymbols_.ctaskSimpleGangDriveByFireGunFn &&
                                         (tickCount - lastPassengerFireTick_) >= fireInterval) {
