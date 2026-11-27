@@ -491,6 +491,7 @@ struct GtaSaNativeSymbols {
     using FnCPedSetCurrentWeaponSlot = void (*)(void* selfPed, int slotIndex);
     using FnCPadGetWeapon = uint8_t (*)(void* selfPad, void* ped, bool bCheckWeapon);
     using FnCCameraSetNewPlayerWeaponMode = void (*)(void* selfCamera, int16_t mode, int16_t maxZoom, int16_t minZoom);
+    using FnCTaskSimpleGangDriveByPed = void (*)(void* selfTask, void* ped);
 
     FnCStreamingRequestSpecialChar cstreamingRequestSpecialCharFn = nullptr;
     FnCStreamingHasSpecialCharLoaded cstreamingHasSpecialCharLoadedFn = nullptr;
@@ -519,6 +520,8 @@ struct GtaSaNativeSymbols {
     FnCPedSetCurrentWeaponSlot cpedSetCurrentWeaponSlotFn = nullptr;
     FnCPadGetWeapon cpadGetWeaponFn = nullptr;
     FnCCameraSetNewPlayerWeaponMode ccameraSetNewPlayerWeaponModeFn = nullptr;
+    FnCTaskSimpleGangDriveByPed ctaskSimpleGangDriveByFireGunFn = nullptr;
+    FnCTaskSimpleGangDriveByPed ctaskSimpleGangDriveByAimGunFn = nullptr;
     void* theCamera = nullptr;                      // TheCamera
     int32_t* scriptParams = nullptr;                // ScriptParams
     void* canimManagerAssocGroups = nullptr;        // _ZN12CAnimManager19ms_aAnimAssocGroupsE
@@ -667,6 +670,8 @@ struct GtaSaNativeSymbols {
         cpedSetCurrentWeaponSlotFn = reinterpret_cast<FnCPedSetCurrentWeaponSlot>(dlsym(libHandle, "_ZN4CPed16SetCurrentWeaponEi"));
         cpadGetWeaponFn = reinterpret_cast<FnCPadGetWeapon>(dlsym(libHandle, "_ZN4CPad9GetWeaponEP4CPedb"));
         ccameraSetNewPlayerWeaponModeFn = reinterpret_cast<FnCCameraSetNewPlayerWeaponMode>(dlsym(libHandle, "_ZN7CCamera22SetNewPlayerWeaponModeEsss"));
+        ctaskSimpleGangDriveByFireGunFn = reinterpret_cast<FnCTaskSimpleGangDriveByPed>(dlsym(libHandle, "_ZN22CTaskSimpleGangDriveBy7FireGunEP4CPed"));
+        ctaskSimpleGangDriveByAimGunFn = reinterpret_cast<FnCTaskSimpleGangDriveByPed>(dlsym(libHandle, "_ZN22CTaskSimpleGangDriveBy6AimGunEP4CPed"));
         theCamera = dlsym(libHandle, "TheCamera");
         scriptParams = reinterpret_cast<int32_t*>(dlsym(libHandle, "ScriptParams"));
         canimManagerAssocGroups = dlsym(libHandle, "_ZN12CAnimManager19ms_aAnimAssocGroupsE");
@@ -1645,7 +1650,7 @@ public:
                     }
                 }
             }
-            if (cutsceneSkipVotesMask_ != 0 && g_origCCutsceneMgrSkipCutscene) {
+            if (!cutsceneSkipAlreadyTriggered_ && cutsceneSkipVotesMask_ != 0 && g_origCCutsceneMgrSkipCutscene) {
                 uint64_t nowCutMs = currentTimeMillis();
                 int localCutIdx = std::clamp(config_.localPlayerSlot, 1, kMaxCoopPlayers) - 1;
                 uint8_t activeMask = static_cast<uint8_t>(1U << localCutIdx);
@@ -1659,15 +1664,19 @@ public:
                     if (cutsceneSkipApprovedUntilMs_ < nowCutMs) {
                         cutsceneSkipApprovedUntilMs_ = nowCutMs + 1200;
                     }
+                    cutsceneSkipAlreadyTriggered_ = true;
                     LOGI("All co-op players voted to skip cutscene (mask=0x%x)! Skipping simultaneously.", activeMask);
                     g_origCCutsceneMgrSkipCutscene();
                 }
             }
             return;
-        } else if (cutsceneSkipVotesMask_ != 0) {
-            uint64_t nowCutMs = currentTimeMillis();
-            if (nowCutMs > cutsceneSkipApprovedUntilMs_ && (nowCutMs - lastCutsceneVoteMs_) > 2500) {
-                cutsceneSkipVotesMask_ = 0;
+        } else {
+            cutsceneSkipAlreadyTriggered_ = false;
+            if (cutsceneSkipVotesMask_ != 0) {
+                uint64_t nowCutMs = currentTimeMillis();
+                if (nowCutMs > cutsceneSkipApprovedUntilMs_ && (nowCutMs - lastCutsceneVoteMs_) > 2500) {
+                    cutsceneSkipVotesMask_ = 0;
+                }
             }
         }
 
@@ -2240,17 +2249,62 @@ public:
                         }
                         localPassengerDriveByPed_.store(localPed, std::memory_order_relaxed);
                         localPassengerDriveByFiring_.store(manualFirePressed, std::memory_order_relaxed);
-                        if (secAttackTask != nullptr && manualFirePressed) {
+                        if (secAttackTask != nullptr) {
                             uintptr_t dbAddr = reinterpret_cast<uintptr_t>(secAttackTask);
-                            // Forzar sub-estado de disparo (m_nSubTaskState = 2 en +0x17) y cooldown = 0 (+0x1e) al mantener presionado el botón
-                            int8_t curSubState = *reinterpret_cast<int8_t*>(dbAddr + 0x17);
-                            if (curSubState <= 2) {
-                                *reinterpret_cast<int8_t*>(dbAddr + 0x17) = 2;
-                                *reinterpret_cast<int16_t*>(dbAddr + 0x1e) = 0;
+                            bool seatRHS = (me.seatIndex == 1 || me.seatIndex == 3);
+                            // Calcular punto de mira 35m al frente de la cámara activa (TheCamera + m_nActiveCam*0x228 + 0x2e0)
+                            CVector aimPoint{
+                                myPos.x - std::sin(myHeading) * 35.0f,
+                                myPos.y + std::cos(myHeading) * 35.0f,
+                                myPos.z + 0.5f
+                            };
+                            if (gtaSymbols_.theCamera != nullptr) {
+                                uintptr_t camBase = reinterpret_cast<uintptr_t>(gtaSymbols_.theCamera);
+                                uint8_t activeCamIdx = *reinterpret_cast<uint8_t*>(camBase + 0x5f);
+                                if (activeCamIdx < 3) {
+                                    uintptr_t activeCam = camBase + static_cast<size_t>(activeCamIdx) * 0x228;
+                                    float fx = *reinterpret_cast<float*>(activeCam + 0x2e0);
+                                    float fy = *reinterpret_cast<float*>(activeCam + 0x2e4);
+                                    float fz = *reinterpret_cast<float*>(activeCam + 0x2e8);
+                                    float fLenSq = fx * fx + fy * fy + fz * fz;
+                                    if (std::isfinite(fLenSq) && fLenSq > 0.1f && fLenSq < 4.0f) {
+                                        aimPoint.x = myPos.x + fx * 35.0f;
+                                        aimPoint.y = myPos.y + fy * 35.0f;
+                                        aimPoint.z = myPos.z + 0.5f + fz * 35.0f;
+                                    }
+                                }
                             }
-                            me.animGroupId |= 0x06u;
-                            me.isAiming = 1u;
-                            pendingWeaponFireBroadcast_.store(true, std::memory_order_relaxed);
+                            *reinterpret_cast<CVector*>(dbAddr + 0x50) = aimPoint;
+                            *reinterpret_cast<uint8_t*>(dbAddr + 0x13) = 1; // m_bCanFire = 1
+                            *reinterpret_cast<uint8_t*>(dbAddr + 0x14) = 1; // m_bTargetInRange = 1
+                            int32_t curDbAnim = *reinterpret_cast<int32_t*>(dbAddr + 0x2c);
+                            if (curDbAnim < 231 || curDbAnim > 238) {
+                                *reinterpret_cast<int32_t*>(dbAddr + 0x2c) = seatRHS ? 236 /*DRIVEBY_RHS*/ : 232 /*DRIVEBY_LHS*/;
+                            }
+                            if (manualFirePressed) {
+                                int8_t curSubState = *reinterpret_cast<int8_t*>(dbAddr + 0x17);
+                                if (curSubState <= 2) {
+                                    *reinterpret_cast<int8_t*>(dbAddr + 0x17) = 2;
+                                    *reinterpret_cast<int16_t*>(dbAddr + 0x1e) = 0;
+                                }
+                                // Invocar AimGun + FireGun nativos de CTaskSimpleGangDriveBy con cadencia segura para garantizar disparo real
+                                // aun si CCamera::Process revierte el modo de cámara del vehículo
+                                void* dbWepInfo = *reinterpret_cast<void**>(dbAddr + 0x40);
+                                if (dbWepInfo != nullptr) {
+                                    if (gtaSymbols_.ctaskSimpleGangDriveByAimGunFn) {
+                                        gtaSymbols_.ctaskSimpleGangDriveByAimGunFn(secAttackTask, localPed);
+                                    }
+                                    int64_t fireInterval = (me.weaponId == 28 || me.weaponId == 29 || me.weaponId == 32) ? 5 : 10;
+                                    if (gtaSymbols_.ctaskSimpleGangDriveByFireGunFn &&
+                                        (tickCount - lastPassengerFireTick_) >= fireInterval) {
+                                        gtaSymbols_.ctaskSimpleGangDriveByFireGunFn(secAttackTask, localPed);
+                                        lastPassengerFireTick_ = tickCount;
+                                    }
+                                }
+                                me.animGroupId |= 0x06u;
+                                me.isAiming = 1u;
+                                pendingWeaponFireBroadcast_.store(true, std::memory_order_relaxed);
+                            }
                         }
                         me.isDriveByActive = (secAttackTask != nullptr);
                     }
@@ -2371,9 +2425,11 @@ public:
         }
 
         // Publicar y aplicar la Skin elegida del jugador local usando la secuencia exacta de 09C7 (CHANGE_PLAYER_MODEL)
-        // soportando tanto modelos normales de peds.ide como personajes especiales de historia (Claude, Sweet, Ryder, Smoke, etc.)
+        // IMPORTANTE: jamás destruir/reconstruir el RpClump de localPed durante una misión activa ($ONMISSION != 0) ni en interiores
+        // (m_nAreaCode != 0 en +0x4b), para no borrar animaciones de misión como "Big Smoke" ni tildar cámaras fijas
         me.skinModelId = config_.localSkinModelId;
-        if (!myVeh && tickCount >= 60) {
+        uint8_t localAreaCode = *reinterpret_cast<uint8_t*>(localPedAddr + 0x4b);
+        if (!myVeh && !onMissionNowPre && localAreaCode == 0 && tickCount >= 60) {
             int16_t curLocalModel = *reinterpret_cast<int16_t*>(localPedAddr + 0x32);
             if (config_.localSkinModelId > 0) {
                 bool localSkinLoaded = false;
@@ -3096,6 +3152,22 @@ public:
 
                 if (wPed) {
                     worldSyncPedHostSlot_[k] = wp.hostPoolSlot;
+                    uintptr_t wPedAddr = reinterpret_cast<uintptr_t>(wPed);
+                    float localCurHp = *reinterpret_cast<float*>(wPedAddr + 0x6ac);
+                    int32_t localPedSt = *reinterpret_cast<int32_t*>(wPedAddr + 0x54c);
+                    // Preservar el daño real que hace el Invitado al disparar: jamás curar de vuelta a wp.health
+                    // y liberar el peatón si el Invitado lo mató para que muera y caiga naturalmente
+                    if (localCurHp <= 1.0f || localPedSt == 54 /*PEDSTATE_DIE*/ || localPedSt == 55 /*PEDSTATE_DEAD*/) {
+                        if (gtaSymbols_.cpedSetCharCreatedByFn) {
+                            gtaSymbols_.cpedSetCharCreatedByFn(wPed, 1 /*RANDOM_CHAR*/);
+                        }
+                        worldSyncPedPtr_[k] = nullptr;
+                        worldSyncPedHandle_[k] = -1;
+                        worldSyncPedHostSlot_[k] = -1;
+                        worldSyncPedModel_[k] = -1;
+                        continue;
+                    }
+                    float effectiveHp = std::min(localCurHp, static_cast<float>(wp.health));
                     if (wp.moveState >= 4 && (nowMs - worldState_.lastNetworkUpdateMs) < 120) {
                         worldState_.peds[k].x += wp.vx * 0.5f;
                         worldState_.peds[k].y += wp.vy * 0.5f;
@@ -3103,7 +3175,7 @@ public:
                     applySmoothPedTransformAndAnim(
                         wPed, worldState_.peds[k].x, worldState_.peds[k].y, wp.z,
                         wp.vx, wp.vy, wp.vz, wp.heading,
-                        static_cast<int>(wp.moveState), static_cast<float>(wp.health)
+                        static_cast<int>(wp.moveState), effectiveHp
                     );
                 }
             }
@@ -3362,8 +3434,12 @@ public:
                     worldSyncVehModel_[v] = actualWModel;
                     *reinterpret_cast<uint8_t*>(wVehAddr + 0x610) = 2; // MISSION_VEHICLE
                     if (wVeh != myVeh || me.seatIndex > 0) {
+                        float localVehHp = *reinterpret_cast<float*>(wVehAddr + 0x634);
+                        float effectiveVehHp = (std::isfinite(localVehHp) && localVehHp > 0.0f)
+                            ? std::min(localVehHp, ve.vehicleHealth)
+                            : ve.vehicleHealth;
                         applyVehicleDamageState(
-                            wVeh, ve.vehicleHealth, ve.damageWheels,
+                            wVeh, effectiveVehHp, ve.damageWheels,
                             ve.damageDoorsLow, ve.damageDoorsHigh, ve.damageLights, ve.damagePanels
                         );
                     }
@@ -5651,6 +5727,8 @@ private:
     uint8_t cutsceneSkipVotesMask_ = 0;
     uint64_t cutsceneSkipApprovedUntilMs_ = 0;
     uint64_t lastCutsceneVoteMs_ = 0;
+    bool cutsceneSkipAlreadyTriggered_ = false;
+    int64_t lastPassengerFireTick_ = 0;
     uint16_t selfInstanceId_ = 2;
     std::string lastWorldCheatSynced_;
     std::string lastAppliedCheatCmd_;
