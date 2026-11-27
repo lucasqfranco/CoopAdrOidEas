@@ -1535,6 +1535,16 @@ public:
             if (isRemPlayer) {
                 warpPedOutOfVehicle(curDrv);
             } else {
+                // Proteger conductores de misión (Big Smoke, Sweet, Ryder, etc., m_nCreatedBy == 2):
+                // jamás expulsarlos ni pisar el asiento del conductor en misiones sobre raíles/guionadas
+                uint8_t drvCreatedBy = *reinterpret_cast<uint8_t*>(reinterpret_cast<uintptr_t>(curDrv) + 0x548);
+                bool isOurManagedNpc = false;
+                for (int v = 0; v < kMaxSyncedWorldVehicles; ++v) {
+                    if (curDrv == worldSyncVehDriverPtr_[v]) { isOurManagedNpc = true; break; }
+                }
+                if (drvCreatedBy == 2 && !isOurManagedNpc) {
+                    return;
+                }
                 evictNpcPedFromWorld(curDrv, localPed);
             }
         }
@@ -2199,7 +2209,23 @@ public:
             // Habilitar disparo real desde la ventana (Drive-By 360° manual + estilo IA) para el acompañante (me.seatIndex > 0).
             // Al entrar como pasajero, CTaskSimpleCarSetPedInAsPassenger::ProcessPed (0x610d14) llama a RemoveWeaponWhenEnteringVehicle(0)
             // que des equipa el arma activa a slot 0 (puño); aquí restauramos automáticamente su subfusil/arma de fuego en mano.
-            if (me.seatIndex > 0) {
+            // No interferir en vehículos RC (Supply Lines, Air Raid, New Model Army) ni en cámaras guionadas/sobre raíles (Just Business, Reuniting the Families)
+            bool isRcVehicleModel = (me.vehicleModelId == 441 || me.vehicleModelId == 464 || me.vehicleModelId == 465 ||
+                                     me.vehicleModelId == 501 || me.vehicleModelId == 564 || me.vehicleModelId == 594);
+            bool isScriptedRailCam = false;
+            if (gtaSymbols_.theCamera != nullptr) {
+                uintptr_t camBase = reinterpret_cast<uintptr_t>(gtaSymbols_.theCamera);
+                uint8_t activeCamIdx = *reinterpret_cast<uint8_t*>(camBase + 0x5f);
+                if (activeCamIdx < 3) {
+                    uint16_t curCamMode = *reinterpret_cast<uint16_t*>(camBase + static_cast<size_t>(activeCamIdx) * 0x228 + 0x186);
+                    if (curCamMode == 14 /*MODE_FIXED*/ || curCamMode == 15 /*MODE_1STPERSON*/ ||
+                        curCamMode == 55 /*MODE_AIMWEAPON_FROMCAR*/) {
+                        isScriptedRailCam = true;
+                    }
+                }
+            }
+
+            if (me.seatIndex > 0 && !isRcVehicleModel && !isScriptedRailCam) {
                 if (me.weaponId < 22 || me.weaponId > 34) {
                     int bestSlot = -1;
                     int32_t bestWepType = 0;
@@ -3771,6 +3797,13 @@ public:
             }
 
             if (ped) {
+                // Sincronizar m_nAreaCode (+0x4b) cuando ambos jugadores están a la misma altura (mismo interior o exterior)
+                // para que puedan verse dentro de la Casa de CJ, casinos, tiendas, Mansión de Madd Dogg, etc.
+                uint8_t curLocalArea = *reinterpret_cast<uint8_t*>(localPedAddr + 0x4b);
+                uintptr_t rpAreaAddr = reinterpret_cast<uintptr_t>(ped);
+                if (std::fabs(rem.z - me.z) < 25.0f) {
+                    *reinterpret_cast<uint8_t*>(rpAreaAddr + 0x4b) = curLocalArea;
+                }
                 if (remoteBlipHandle_[i] > 0 && remoteBlipColor_[i] != static_cast<int>(desiredSlotColor)) {
                     if (gtaSymbols_.cradarChangeBlipColourFn) {
                         gtaSymbols_.cradarChangeBlipColourFn(remoteBlipHandle_[i], desiredSlotColor);
