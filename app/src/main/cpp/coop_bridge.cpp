@@ -1711,14 +1711,22 @@ public:
             localPassengerDriveByFiring_.store(false, std::memory_order_relaxed);
             localPassengerDriveByPed_.store(nullptr, std::memory_order_relaxed);
             for (int i = 0; i < kMaxCoopPlayers; ++i) {
+                void* oldRemPed = remotePedPtr_[i];
+                int oldRemHandle = remotePedHandle_[i];
                 remotePedPtr_[i] = nullptr;
                 remotePedHandle_[i] = -1;
+                remotePedSpawnedModel_[i] = 0;
                 remotePedAppliedSkinId_[i] = 0;
                 specialSlotRequestedSkin_[i] = -1;
                 remoteWasJumping_[i] = false;
+                remotePedSmoothValid_[i] = false;
                 remotePartnerVehPtr_[i] = nullptr;
                 remotePartnerVehHandle_[i] = -1;
                 remoteLastVehSpawnTick_[i] = 0;
+                if (oldRemPed != nullptr && gtaSymbols_.cpoolsGetPedFn && oldRemHandle > 0 &&
+                    gtaSymbols_.cpoolsGetPedFn(oldRemHandle) == oldRemPed) {
+                    evictNpcPedFromWorld(oldRemPed, localPed);
+                }
             }
             for (int k = 0; k < kMaxSyncedWorldPeds; ++k) {
                 worldSyncPedPtr_[k] = nullptr;
@@ -1748,14 +1756,22 @@ public:
             initialAlleyFreeRoamDone_ = false;
             alleyLandWaitTicks_ = 0;
             for (int i = 0; i < kMaxCoopPlayers; ++i) {
+                void* oldRemPed = remotePedPtr_[i];
+                int oldRemHandle = remotePedHandle_[i];
                 remotePedPtr_[i] = nullptr;
                 remotePedHandle_[i] = -1;
+                remotePedSpawnedModel_[i] = 0;
                 remotePedAppliedSkinId_[i] = 0;
                 specialSlotRequestedSkin_[i] = -1;
                 remoteWasJumping_[i] = false;
+                remotePedSmoothValid_[i] = false;
                 remotePartnerVehPtr_[i] = nullptr;
                 remotePartnerVehHandle_[i] = -1;
                 remoteLastVehSpawnTick_[i] = 0;
+                if (oldRemPed != nullptr && gtaSymbols_.cpoolsGetPedFn && oldRemHandle > 0 &&
+                    gtaSymbols_.cpoolsGetPedFn(oldRemHandle) == oldRemPed) {
+                    evictNpcPedFromWorld(oldRemPed, localPed);
+                }
             }
             for (int k = 0; k < kMaxSyncedWorldPeds; ++k) {
                 worldSyncPedPtr_[k] = nullptr;
@@ -3601,15 +3617,18 @@ public:
                 remoteBlipHandle_[i] = -1;
                 remoteBlipColor_[i] = -1;
                 if (remotePedPtr_[i] != nullptr) {
-                    if (!gtaSymbols_.cpoolsGetPedFn || remotePedHandle_[i] <= 0 ||
-                        gtaSymbols_.cpoolsGetPedFn(remotePedHandle_[i]) == remotePedPtr_[i]) {
-                        evictNpcPedFromWorld(remotePedPtr_[i], localPed);
-                    }
+                    void* oldRemPed = remotePedPtr_[i];
+                    int oldRemHandle = remotePedHandle_[i];
                     remotePedPtr_[i] = nullptr;
                     remotePedHandle_[i] = -1;
                     remotePedSpawnedModel_[i] = 0;
                     remotePedAppliedSkinId_[i] = 0;
                     remotePedEquippedWeapon_[i] = -1;
+                    remotePedSmoothValid_[i] = false;
+                    if (!gtaSymbols_.cpoolsGetPedFn || oldRemHandle <= 0 ||
+                        gtaSymbols_.cpoolsGetPedFn(oldRemHandle) == oldRemPed) {
+                        evictNpcPedFromWorld(oldRemPed, localPed);
+                    }
                 }
                 if (rem.lastNetworkUpdateMs > 0) {
                     rem.isActive = false;
