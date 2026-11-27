@@ -2293,28 +2293,6 @@ public:
                 if (me.weaponId >= 22 && me.weaponId <= 34) {
                     uintptr_t localIntel = *reinterpret_cast<uintptr_t*>(localPedAddr + 0x538);
                     if (localIntel != 0) {
-                        void* secAttackTask = *reinterpret_cast<void**>(localIntel + 0x30); // m_aSecondaryTasks[0] = TASK_SECONDARY_ATTACK
-                        if (secAttackTask == nullptr &&
-                            gtaSymbols_.ctaskOperatorNewFn &&
-                            gtaSymbols_.ctaskSimpleGangDriveByCtorFn &&
-                            gtaSymbols_.ctaskManagerSetTaskSecondaryFn) {
-                            void* dbTask = gtaSymbols_.ctaskOperatorNewFn(0x60);
-                            if (dbTask) {
-                                bool seatRHS = (me.seatIndex == 1 || me.seatIndex == 3);
-                                CVector initAim{
-                                    myPos.x - std::sin(myHeading) * 35.0f,
-                                    myPos.y + std::cos(myHeading) * 35.0f,
-                                    myPos.z + 0.5f
-                                };
-                                // Estilo 4 (DRIVEBY_FIXED_LHS/RHS / Gang Drive-By): permite apuntar libremente hacia m_vecTargetCoors
-                                // sin exigir MODE_AIMWEAPON_FROMCAR (55) en TheCamera
-                                gtaSymbols_.ctaskSimpleGangDriveByCtorFn(dbTask, nullptr, &initAim, 1000.0f, 100, 4, seatRHS);
-                                gtaSymbols_.ctaskManagerSetTaskSecondaryFn(reinterpret_cast<void*>(localIntel + 0x08), dbTask, 0);
-                                secAttackTask = *reinterpret_cast<void**>(localIntel + 0x30);
-                                LOGI("Enabled Passenger Drive-By (CTaskSimpleGangDriveBy style=4) on localPed=%p seat=%d wep=%d",
-                                     localPed, me.seatIndex, me.weaponId);
-                            }
-                        }
                         // En GTA SA Mobile (CTouchInterface::WidgetIDs): 0=WIDGET_ENTER_CAR, 1=WIDGET_ATTACK, 11=WIDGET_CAR_SHOOT, 16/17=SHOOT_LEFT/RIGHT
                         // Habilitamos ÚNICAMENTE WIDGET_ATTACK (1) para que aparezca el botón nativo de disparo sin superponer controles
                         bool manualFirePressed = false;
@@ -2326,17 +2304,24 @@ public:
                         } else if (gtaSymbols_.ctouchInterfaceIsTouchedFn) {
                             if (gtaSymbols_.ctouchInterfaceIsTouchedFn(1 /*WIDGET_ATTACK*/, nullptr, 1)) manualFirePressed = true;
                         }
+                        if (manualFirePressed) {
+                            lastPassengerFireTick_ = tickCount;
+                        }
+                        // Solo salir por la ventanilla cuando el jugador apunta/dispara (con ~0.6s de gracia al soltar para evitar parpadeos)
+                        bool wantLeanOut = manualFirePressed ||
+                                           (lastPassengerFireTick_ > 0 && (tickCount - lastPassengerFireTick_) < 35);
                         localPassengerDriveByPed_.store(localPed, std::memory_order_relaxed);
                         localPassengerDriveByFiring_.store(manualFirePressed, std::memory_order_relaxed);
-                        if (secAttackTask != nullptr) {
-                            uintptr_t dbAddr = reinterpret_cast<uintptr_t>(secAttackTask);
-                            bool seatRHS = (me.seatIndex == 1 || me.seatIndex == 3);
+
+                        void* secAttackTask = *reinterpret_cast<void**>(localIntel + 0x30); // m_aSecondaryTasks[0] = TASK_SECONDARY_ATTACK
+                        if (wantLeanOut) {
                             // Calcular punto de mira 35m al frente de la cámara activa (TheCamera + m_nActiveCam*0x228 + 0x2e0)
                             CVector aimPoint{
                                 myPos.x - std::sin(myHeading) * 35.0f,
                                 myPos.y + std::cos(myHeading) * 35.0f,
                                 myPos.z + 0.5f
                             };
+                            float aimHeading = myHeading;
                             if (gtaSymbols_.theCamera != nullptr) {
                                 uintptr_t camBase = reinterpret_cast<uintptr_t>(gtaSymbols_.theCamera);
                                 uint8_t activeCamIdx = *reinterpret_cast<uint8_t*>(camBase + 0x5f);
@@ -2350,47 +2335,71 @@ public:
                                         aimPoint.x = myPos.x + fx * 35.0f;
                                         aimPoint.y = myPos.y + fy * 35.0f;
                                         aimPoint.z = myPos.z + 0.5f + fz * 35.0f;
+                                        aimHeading = std::atan2(-fx, fy);
                                     }
                                 }
                             }
-                            *reinterpret_cast<CVector*>(dbAddr + 0x50) = aimPoint;
-                            *reinterpret_cast<uint8_t*>(dbAddr + 0x13) = 1; // m_bCanFire = 1
-                            *reinterpret_cast<uint8_t*>(dbAddr + 0x14) = 1; // m_bTargetInRange = 1
-                            int32_t curDbAnim = *reinterpret_cast<int32_t*>(dbAddr + 0x2c);
-                            if (curDbAnim < 231 || curDbAnim > 238) {
-                                *reinterpret_cast<int32_t*>(dbAddr + 0x2c) = seatRHS ? 236 /*DRIVEBY_RHS*/ : 232 /*DRIVEBY_LHS*/;
-                            }
-                            // Garantizar que m_pWeaponInfo (+0x40) esté poblado con el arma actual del pasajero
-                            void* dbWepInfo = *reinterpret_cast<void**>(dbAddr + 0x40);
-                            if (dbWepInfo == nullptr && gtaSymbols_.cweaponInfoGetWeaponInfoFn) {
-                                dbWepInfo = gtaSymbols_.cweaponInfoGetWeaponInfoFn(me.weaponId, 1);
-                                *reinterpret_cast<void**>(dbAddr + 0x40) = dbWepInfo;
-                            }
-                            // Apuntar continuamente el torso/arma hacia donde mira la cámara 360°
-                            if (dbWepInfo != nullptr && gtaSymbols_.ctaskSimpleGangDriveByAimGunFn) {
-                                gtaSymbols_.ctaskSimpleGangDriveByAimGunFn(secAttackTask, localPed);
-                            }
-                            if (manualFirePressed) {
-                                int8_t curSubState = *reinterpret_cast<int8_t*>(dbAddr + 0x17);
-                                if (curSubState <= 2) {
-                                    *reinterpret_cast<int8_t*>(dbAddr + 0x17) = 2;
-                                    *reinterpret_cast<int16_t*>(dbAddr + 0x1e) = 0;
+                            if (secAttackTask == nullptr &&
+                                gtaSymbols_.ctaskOperatorNewFn &&
+                                gtaSymbols_.ctaskSimpleGangDriveByCtorFn &&
+                                gtaSymbols_.ctaskManagerSetTaskSecondaryFn) {
+                                void* dbTask = gtaSymbols_.ctaskOperatorNewFn(0x60);
+                                if (dbTask) {
+                                    bool seatRHS = (me.seatIndex == 1 || me.seatIndex == 3);
+                                    gtaSymbols_.ctaskSimpleGangDriveByCtorFn(dbTask, nullptr, &aimPoint, 1000.0f, 100, 4, seatRHS);
+                                    gtaSymbols_.ctaskManagerSetTaskSecondaryFn(reinterpret_cast<void*>(localIntel + 0x08), dbTask, 0);
+                                    secAttackTask = *reinterpret_cast<void**>(localIntel + 0x30);
+                                    LOGI("Passenger leaned out for Drive-By (style=4) on localPed=%p seat=%d wep=%d",
+                                         localPed, me.seatIndex, me.weaponId);
                                 }
-                                // Disparar balas reales con FireGun al mantener el botón WIDGET_ATTACK (1)
-                                if (dbWepInfo != nullptr) {
-                                    int64_t fireInterval = (me.weaponId == 28 || me.weaponId == 29 || me.weaponId == 32) ? 5 : 10;
-                                    if (gtaSymbols_.ctaskSimpleGangDriveByFireGunFn &&
-                                        (tickCount - lastPassengerFireTick_) >= fireInterval) {
-                                        gtaSymbols_.ctaskSimpleGangDriveByFireGunFn(secAttackTask, localPed);
-                                        lastPassengerFireTick_ = tickCount;
+                            }
+                            if (secAttackTask != nullptr) {
+                                uintptr_t dbAddr = reinterpret_cast<uintptr_t>(secAttackTask);
+                                bool seatRHS = (me.seatIndex == 1 || me.seatIndex == 3);
+                                *reinterpret_cast<CVector*>(dbAddr + 0x50) = aimPoint;
+                                *reinterpret_cast<uint8_t*>(dbAddr + 0x13) = 1; // m_bCanFire = 1
+                                *reinterpret_cast<uint8_t*>(dbAddr + 0x14) = 1; // m_bTargetInRange = 1
+                                int32_t curDbAnim = *reinterpret_cast<int32_t*>(dbAddr + 0x2c);
+                                if (curDbAnim < 231 || curDbAnim > 238) {
+                                    *reinterpret_cast<int32_t*>(dbAddr + 0x2c) = seatRHS ? 236 /*DRIVEBY_RHS*/ : 232 /*DRIVEBY_LHS*/;
+                                }
+                                void* dbWepInfo = *reinterpret_cast<void**>(dbAddr + 0x40);
+                                if (dbWepInfo == nullptr && gtaSymbols_.cweaponInfoGetWeaponInfoFn) {
+                                    dbWepInfo = gtaSymbols_.cweaponInfoGetWeaponInfoFn(me.weaponId, 1);
+                                    *reinterpret_cast<void**>(dbAddr + 0x40) = dbWepInfo;
+                                }
+                                if (dbWepInfo != nullptr && gtaSymbols_.ctaskSimpleGangDriveByAimGunFn) {
+                                    gtaSymbols_.ctaskSimpleGangDriveByAimGunFn(secAttackTask, localPed);
+                                }
+                                if (manualFirePressed) {
+                                    int8_t curSubState = *reinterpret_cast<int8_t*>(dbAddr + 0x17);
+                                    if (curSubState <= 2) {
+                                        *reinterpret_cast<int8_t*>(dbAddr + 0x17) = 2;
+                                        *reinterpret_cast<int16_t*>(dbAddr + 0x1e) = 0;
                                     }
+                                    if (dbWepInfo != nullptr) {
+                                        int64_t fireInterval = (me.weaponId == 28 || me.weaponId == 29 || me.weaponId == 32) ? 5 : 10;
+                                        if (gtaSymbols_.ctaskSimpleGangDriveByFireGunFn &&
+                                            (tickCount - lastPassengerShotTick_) >= fireInterval) {
+                                            gtaSymbols_.ctaskSimpleGangDriveByFireGunFn(secAttackTask, localPed);
+                                            lastPassengerShotTick_ = tickCount;
+                                        }
+                                    }
+                                    pendingWeaponFireBroadcast_.store(true, std::memory_order_relaxed);
                                 }
-                                me.animGroupId |= 0x06u;
-                                me.isAiming = 1u;
-                                pendingWeaponFireBroadcast_.store(true, std::memory_order_relaxed);
                             }
+                            me.isDriveByActive = true;
+                            me.isAiming = 1u;
+                            me.heading = aimHeading;
+                            me.animGroupId |= (manualFirePressed ? 0x06u : 0x02u);
+                        } else {
+                            // Sentado normalmente dentro del vehículo hasta que apunte/dispare
+                            if (secAttackTask != nullptr && gtaSymbols_.ctaskManagerSetTaskSecondaryFn) {
+                                gtaSymbols_.ctaskManagerSetTaskSecondaryFn(reinterpret_cast<void*>(localIntel + 0x08), nullptr, 0);
+                            }
+                            me.isDriveByActive = false;
+                            me.isAiming = 0u;
                         }
-                        me.isDriveByActive = (secAttackTask != nullptr);
                     }
                 } else {
                     localPassengerDriveByFiring_.store(false, std::memory_order_relaxed);
@@ -4168,39 +4177,65 @@ public:
                             if (gtaSymbols_.cpedSetPedPositionInCarFn) {
                                 gtaSymbols_.cpedSetPedPositionInCarFn(ped);
                             }
-                            // Activar CTaskSimpleGangDriveBy en el CCivilianPed remoto (modo 4 = AI_ALL_DIRECTIONS)
-                            // con punto objetivo proyectado para que en la pantalla del conductor el acompañante saque
-                            // medio cuerpo por la ventanilla y dispare como los miembros de la pandilla
+                            // Sincronizar salida por la ventanilla SOLO cuando el compañero remoto está apuntando/disparando;
+                            // cuando suelta el disparo, limpiar TASK_SECONDARY_ATTACK para que vuelva a sentarse adentro en todos los dispositivos
                             uintptr_t remIntel = *reinterpret_cast<uintptr_t*>(remPedAddr + 0x538);
-                            if (remIntel != 0 && (rem.isDriveByActive || (rem.weaponId >= 22 && rem.weaponId <= 34))) {
-                                float aimDist = 35.0f;
-                                CVector aimTarget{
-                                    targetRemX - std::sin(rem.heading) * aimDist,
-                                    targetRemY + std::cos(rem.heading) * aimDist,
-                                    targetRemZ + 0.5f
-                                };
+                            if (remIntel != 0) {
+                                bool remWantLeanOut = (rem.isDriveByActive || rem.isAiming != 0 || (rem.animGroupId & 0x06u) != 0) &&
+                                                      (rem.weaponId >= 22 && rem.weaponId <= 34);
                                 void* remSecTask = *reinterpret_cast<void**>(remIntel + 0x30);
-                                if (remSecTask == nullptr &&
-                                    gtaSymbols_.ctaskOperatorNewFn &&
-                                    gtaSymbols_.ctaskSimpleGangDriveByCtorFn &&
-                                    gtaSymbols_.ctaskManagerSetTaskSecondaryFn) {
-                                    void* dbTask = gtaSymbols_.ctaskOperatorNewFn(0x60);
-                                    if (dbTask) {
-                                        bool seatRHS = (seatSlot == 0 || seatSlot == 2);
-                                        gtaSymbols_.ctaskSimpleGangDriveByCtorFn(dbTask, nullptr, &aimTarget, 1000.0f, 100, 4, seatRHS);
-                                        gtaSymbols_.ctaskManagerSetTaskSecondaryFn(reinterpret_cast<void*>(remIntel + 0x08), dbTask, 0);
-                                        remSecTask = *reinterpret_cast<void**>(remIntel + 0x30);
-                                    }
-                                }
-                                if (remSecTask != nullptr) {
-                                    uintptr_t rdbAddr = reinterpret_cast<uintptr_t>(remSecTask);
-                                    *reinterpret_cast<CVector*>(rdbAddr + 0x50) = aimTarget;
-                                    if ((rem.animGroupId & 0x06u) != 0 || rem.isAiming != 0) {
-                                        if (*reinterpret_cast<int8_t*>(rdbAddr + 0x17) <= 2) {
-                                            *reinterpret_cast<int8_t*>(rdbAddr + 0x17) = 2;
-                                            *reinterpret_cast<int16_t*>(rdbAddr + 0x1e) = 0;
+                                if (remWantLeanOut) {
+                                    float aimDist = 35.0f;
+                                    CVector aimTarget{
+                                        targetRemX - std::sin(rem.heading) * aimDist,
+                                        targetRemY + std::cos(rem.heading) * aimDist,
+                                        targetRemZ + 0.5f
+                                    };
+                                    if (remSecTask == nullptr &&
+                                        gtaSymbols_.ctaskOperatorNewFn &&
+                                        gtaSymbols_.ctaskSimpleGangDriveByCtorFn &&
+                                        gtaSymbols_.ctaskManagerSetTaskSecondaryFn) {
+                                        void* dbTask = gtaSymbols_.ctaskOperatorNewFn(0x60);
+                                        if (dbTask) {
+                                            bool seatRHS = (seatSlot == 0 || seatSlot == 2);
+                                            gtaSymbols_.ctaskSimpleGangDriveByCtorFn(dbTask, nullptr, &aimTarget, 1000.0f, 100, 4, seatRHS);
+                                            gtaSymbols_.ctaskManagerSetTaskSecondaryFn(reinterpret_cast<void*>(remIntel + 0x08), dbTask, 0);
+                                            remSecTask = *reinterpret_cast<void**>(remIntel + 0x30);
                                         }
                                     }
+                                    if (remSecTask != nullptr) {
+                                        uintptr_t rdbAddr = reinterpret_cast<uintptr_t>(remSecTask);
+                                        bool seatRHS = (seatSlot == 0 || seatSlot == 2);
+                                        *reinterpret_cast<CVector*>(rdbAddr + 0x50) = aimTarget;
+                                        *reinterpret_cast<uint8_t*>(rdbAddr + 0x13) = 1;
+                                        *reinterpret_cast<uint8_t*>(rdbAddr + 0x14) = 1;
+                                        int32_t curRDbAnim = *reinterpret_cast<int32_t*>(rdbAddr + 0x2c);
+                                        if (curRDbAnim < 231 || curRDbAnim > 238) {
+                                            *reinterpret_cast<int32_t*>(rdbAddr + 0x2c) = seatRHS ? 236 : 232;
+                                        }
+                                        void* remWepInfo = *reinterpret_cast<void**>(rdbAddr + 0x40);
+                                        if (remWepInfo == nullptr && gtaSymbols_.cweaponInfoGetWeaponInfoFn) {
+                                            remWepInfo = gtaSymbols_.cweaponInfoGetWeaponInfoFn(rem.weaponId, 1);
+                                            *reinterpret_cast<void**>(rdbAddr + 0x40) = remWepInfo;
+                                        }
+                                        if (remWepInfo != nullptr && gtaSymbols_.ctaskSimpleGangDriveByAimGunFn) {
+                                            gtaSymbols_.ctaskSimpleGangDriveByAimGunFn(remSecTask, ped);
+                                        }
+                                        if ((rem.animGroupId & 0x04u) != 0) {
+                                            if (*reinterpret_cast<int8_t*>(rdbAddr + 0x17) <= 2) {
+                                                *reinterpret_cast<int8_t*>(rdbAddr + 0x17) = 2;
+                                                *reinterpret_cast<int16_t*>(rdbAddr + 0x1e) = 0;
+                                            }
+                                            int64_t rFireInterval = (rem.weaponId == 28 || rem.weaponId == 29 || rem.weaponId == 32) ? 5 : 10;
+                                            if (remWepInfo != nullptr && gtaSymbols_.ctaskSimpleGangDriveByFireGunFn &&
+                                                (tickCount - remotePassengerShotTick_[i]) >= rFireInterval) {
+                                                gtaSymbols_.ctaskSimpleGangDriveByFireGunFn(remSecTask, ped);
+                                                remotePassengerShotTick_[i] = tickCount;
+                                            }
+                                        }
+                                    }
+                                } else if (remSecTask != nullptr && gtaSymbols_.ctaskManagerSetTaskSecondaryFn) {
+                                    gtaSymbols_.ctaskManagerSetTaskSecondaryFn(reinterpret_cast<void*>(remIntel + 0x08), nullptr, 0);
                                 }
                             }
                         }
@@ -5853,6 +5888,8 @@ private:
     uint64_t lastCutsceneVoteMs_ = 0;
     bool cutsceneSkipAlreadyTriggered_ = false;
     int64_t lastPassengerFireTick_ = 0;
+    int64_t lastPassengerShotTick_ = 0;
+    int64_t remotePassengerShotTick_[kMaxCoopPlayers] = {0, 0, 0, 0};
     uint16_t selfInstanceId_ = 2;
     std::string lastWorldCheatSynced_;
     std::string lastAppliedCheatCmd_;
