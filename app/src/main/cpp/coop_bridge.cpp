@@ -2303,7 +2303,26 @@ public:
                     }
                 }
 
-                if (me.weaponId >= 22 && me.weaponId <= 34) {
+                // Permitir salir del vehículo limpiamente al acompañante cuando presiona WIDGET_ENTER_CAR (0)
+                bool passengerPressedExit = false;
+                if (gtaSymbols_.ctouchInterfaceIsHeldDownFn &&
+                    gtaSymbols_.ctouchInterfaceIsHeldDownFn(0 /*WIDGET_ENTER_CAR*/, 0)) {
+                    passengerPressedExit = true;
+                }
+                if (passengerPressedExit) {
+                    uintptr_t localIntelExit = *reinterpret_cast<uintptr_t*>(localPedAddr + 0x538);
+                    if (localIntelExit != 0 && gtaSymbols_.ctaskManagerSetTaskSecondaryFn) {
+                        gtaSymbols_.ctaskManagerSetTaskSecondaryFn(reinterpret_cast<void*>(localIntelExit + 0x08), nullptr, 0);
+                    }
+                    warpPedOutOfVehicle(localPed);
+                    myVeh = nullptr;
+                    me.seatIndex = -1;
+                    me.vehicleNetId = 0;
+                    me.isDriveByActive = false;
+                    me.isAiming = 0u;
+                    localPassengerDriveByFiring_.store(false, std::memory_order_relaxed);
+                    LOGI("Passenger exited vehicle cleanly via WIDGET_ENTER_CAR on localPed=%p", localPed);
+                } else if (me.weaponId >= 22 && me.weaponId <= 34) {
                     uintptr_t localIntel = *reinterpret_cast<uintptr_t*>(localPedAddr + 0x538);
                     if (localIntel != 0) {
                         // En GTA SA Mobile (CTouchInterface::WidgetIDs): 0=WIDGET_ENTER_CAR, 1=WIDGET_ATTACK, 11=WIDGET_CAR_SHOOT, 16/17=SHOOT_LEFT/RIGHT
@@ -2320,7 +2339,7 @@ public:
                         if (manualFirePressed) {
                             lastPassengerFireTick_ = tickCount;
                         }
-                        // Solo salir por la ventanilla cuando el jugador apunta/dispara (con ~0.6s de gracia al soltar para evitar parpadeos)
+                        // Solo salir por la ventanilla cuando el jugador apunta/dispara (con ~0.6s de gracia al soltar)
                         bool wantLeanOut = manualFirePressed ||
                                            (lastPassengerFireTick_ > 0 && (tickCount - lastPassengerFireTick_) < 35);
                         localPassengerDriveByPed_.store(localPed, std::memory_order_relaxed);
@@ -2359,6 +2378,8 @@ public:
                                 void* dbTask = gtaSymbols_.ctaskOperatorNewFn(0x60);
                                 if (dbTask) {
                                     bool seatRHS = (me.seatIndex == 1 || me.seatIndex == 3);
+                                    // Dejar que CTaskSimpleGangDriveBy::ProcessPed ejecute AimGun y FireGun de forma nativa y segura
+                                    // (jamás invocar AimGun manualmente cuando m_pAnim aún es nullptr -> SIGSEGV +0x44)
                                     gtaSymbols_.ctaskSimpleGangDriveByCtorFn(dbTask, nullptr, &aimPoint, 1000.0f, 100, 4, seatRHS);
                                     gtaSymbols_.ctaskManagerSetTaskSecondaryFn(reinterpret_cast<void*>(localIntel + 0x08), dbTask, 0);
                                     secAttackTask = *reinterpret_cast<void**>(localIntel + 0x30);
@@ -2368,35 +2389,11 @@ public:
                             }
                             if (secAttackTask != nullptr) {
                                 uintptr_t dbAddr = reinterpret_cast<uintptr_t>(secAttackTask);
-                                bool seatRHS = (me.seatIndex == 1 || me.seatIndex == 3);
                                 *reinterpret_cast<CVector*>(dbAddr + 0x50) = aimPoint;
-                                *reinterpret_cast<uint8_t*>(dbAddr + 0x13) = 1; // m_bCanFire = 1
-                                *reinterpret_cast<uint8_t*>(dbAddr + 0x14) = 1; // m_bTargetInRange = 1
-                                int32_t curDbAnim = *reinterpret_cast<int32_t*>(dbAddr + 0x2c);
-                                if (curDbAnim < 231 || curDbAnim > 238) {
-                                    *reinterpret_cast<int32_t*>(dbAddr + 0x2c) = seatRHS ? 236 /*DRIVEBY_RHS*/ : 232 /*DRIVEBY_LHS*/;
-                                }
-                                void* dbWepInfo = *reinterpret_cast<void**>(dbAddr + 0x40);
-                                if (dbWepInfo == nullptr && gtaSymbols_.cweaponInfoGetWeaponInfoFn) {
-                                    dbWepInfo = gtaSymbols_.cweaponInfoGetWeaponInfoFn(me.weaponId, 1);
-                                    *reinterpret_cast<void**>(dbAddr + 0x40) = dbWepInfo;
-                                }
-                                if (dbWepInfo != nullptr && gtaSymbols_.ctaskSimpleGangDriveByAimGunFn) {
-                                    gtaSymbols_.ctaskSimpleGangDriveByAimGunFn(secAttackTask, localPed);
-                                }
                                 if (manualFirePressed) {
-                                    int8_t curSubState = *reinterpret_cast<int8_t*>(dbAddr + 0x17);
-                                    if (curSubState <= 2) {
+                                    if (*reinterpret_cast<int8_t*>(dbAddr + 0x17) <= 2) {
                                         *reinterpret_cast<int8_t*>(dbAddr + 0x17) = 2;
                                         *reinterpret_cast<int16_t*>(dbAddr + 0x1e) = 0;
-                                    }
-                                    if (dbWepInfo != nullptr) {
-                                        int64_t fireInterval = (me.weaponId == 28 || me.weaponId == 29 || me.weaponId == 32) ? 5 : 10;
-                                        if (gtaSymbols_.ctaskSimpleGangDriveByFireGunFn &&
-                                            (tickCount - lastPassengerShotTick_) >= fireInterval) {
-                                            gtaSymbols_.ctaskSimpleGangDriveByFireGunFn(secAttackTask, localPed);
-                                            lastPassengerShotTick_ = tickCount;
-                                        }
                                     }
                                     pendingWeaponFireBroadcast_.store(true, std::memory_order_relaxed);
                                 }
@@ -4218,32 +4215,11 @@ public:
                                     }
                                     if (remSecTask != nullptr) {
                                         uintptr_t rdbAddr = reinterpret_cast<uintptr_t>(remSecTask);
-                                        bool seatRHS = (seatSlot == 0 || seatSlot == 2);
                                         *reinterpret_cast<CVector*>(rdbAddr + 0x50) = aimTarget;
-                                        *reinterpret_cast<uint8_t*>(rdbAddr + 0x13) = 1;
-                                        *reinterpret_cast<uint8_t*>(rdbAddr + 0x14) = 1;
-                                        int32_t curRDbAnim = *reinterpret_cast<int32_t*>(rdbAddr + 0x2c);
-                                        if (curRDbAnim < 231 || curRDbAnim > 238) {
-                                            *reinterpret_cast<int32_t*>(rdbAddr + 0x2c) = seatRHS ? 236 : 232;
-                                        }
-                                        void* remWepInfo = *reinterpret_cast<void**>(rdbAddr + 0x40);
-                                        if (remWepInfo == nullptr && gtaSymbols_.cweaponInfoGetWeaponInfoFn) {
-                                            remWepInfo = gtaSymbols_.cweaponInfoGetWeaponInfoFn(rem.weaponId, 1);
-                                            *reinterpret_cast<void**>(rdbAddr + 0x40) = remWepInfo;
-                                        }
-                                        if (remWepInfo != nullptr && gtaSymbols_.ctaskSimpleGangDriveByAimGunFn) {
-                                            gtaSymbols_.ctaskSimpleGangDriveByAimGunFn(remSecTask, ped);
-                                        }
                                         if ((rem.animGroupId & 0x04u) != 0) {
                                             if (*reinterpret_cast<int8_t*>(rdbAddr + 0x17) <= 2) {
                                                 *reinterpret_cast<int8_t*>(rdbAddr + 0x17) = 2;
                                                 *reinterpret_cast<int16_t*>(rdbAddr + 0x1e) = 0;
-                                            }
-                                            int64_t rFireInterval = (rem.weaponId == 28 || rem.weaponId == 29 || rem.weaponId == 32) ? 5 : 10;
-                                            if (remWepInfo != nullptr && gtaSymbols_.ctaskSimpleGangDriveByFireGunFn &&
-                                                (tickCount - remotePassengerShotTick_[i]) >= rFireInterval) {
-                                                gtaSymbols_.ctaskSimpleGangDriveByFireGunFn(remSecTask, ped);
-                                                remotePassengerShotTick_[i] = tickCount;
                                             }
                                         }
                                     }
