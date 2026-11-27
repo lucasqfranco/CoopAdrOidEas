@@ -1737,6 +1737,11 @@ public:
             for (int i = 0; i < kMaxCoopPlayers; ++i) {
                 void* oldRemPed = remotePedPtr_[i];
                 int oldRemHandle = remotePedHandle_[i];
+                if (remoteBlipHandle_[i] > 0 && gtaSymbols_.cradarClearBlipFn) {
+                    gtaSymbols_.cradarClearBlipFn(remoteBlipHandle_[i]);
+                }
+                remoteBlipHandle_[i] = -1;
+                remoteBlipColor_[i] = -1;
                 remotePedPtr_[i] = nullptr;
                 remotePedHandle_[i] = -1;
                 remotePedSpawnedModel_[i] = 0;
@@ -1782,6 +1787,11 @@ public:
             for (int i = 0; i < kMaxCoopPlayers; ++i) {
                 void* oldRemPed = remotePedPtr_[i];
                 int oldRemHandle = remotePedHandle_[i];
+                if (remoteBlipHandle_[i] > 0 && gtaSymbols_.cradarClearBlipFn) {
+                    gtaSymbols_.cradarClearBlipFn(remoteBlipHandle_[i]);
+                }
+                remoteBlipHandle_[i] = -1;
+                remoteBlipColor_[i] = -1;
                 remotePedPtr_[i] = nullptr;
                 remotePedHandle_[i] = -1;
                 remotePedSpawnedModel_[i] = 0;
@@ -2028,16 +2038,19 @@ public:
                     if (!partnerVeh) continue;
                     uintptr_t pvMat = *reinterpret_cast<uintptr_t*>(reinterpret_cast<uintptr_t>(partnerVeh) + 0x18);
                     if (pvMat == 0) continue;
+                    uintptr_t pvAddr = reinterpret_cast<uintptr_t>(partnerVeh);
+                    int16_t pvModel = *reinterpret_cast<int16_t*>(pvAddr + 0x32);
+                    bool pvIsBike = (pvModel == 481 || pvModel == 509 || pvModel == 510 ||
+                                     pvModel == 448 || pvModel == 461 || pvModel == 462 ||
+                                     pvModel == 463 || pvModel == 468 || pvModel == 471 ||
+                                     pvModel == 521 || pvModel == 522 || pvModel == 523 ||
+                                     pvModel == 581 || pvModel == 586);
+                    // En misiones con bicicletas/motos (ej. BMX de Sweet & Kendl), JAMÁS cancelar la entrada ni spawnear bicis extra
+                    if (pvIsBike && onMission) continue;
                     float dvx = *reinterpret_cast<float*>(pvMat + 0x30) - myPos.x;
                     float dvy = *reinterpret_cast<float*>(pvMat + 0x34) - myPos.y;
-                    if ((dvx * dvx + dvy * dvy) < (9.5f * 9.5f)) {
-                        uintptr_t pvAddr = reinterpret_cast<uintptr_t>(partnerVeh);
-                        int16_t pvModel = *reinterpret_cast<int16_t*>(pvAddr + 0x32);
-                        bool pvIsBike = (pvModel == 481 || pvModel == 509 || pvModel == 510 ||
-                                         pvModel == 448 || pvModel == 461 || pvModel == 462 ||
-                                         pvModel == 463 || pvModel == 468 || pvModel == 471 ||
-                                         pvModel == 521 || pvModel == 522 || pvModel == 523 ||
-                                         pvModel == 581 || pvModel == 586);
+                    float maxInterceptDist = pvIsBike ? 2.8f : 7.5f;
+                    if ((dvx * dvx + dvy * dvy) < (maxInterceptDist * maxInterceptDist)) {
                         uint8_t numPass = *reinterpret_cast<uint8_t*>(pvAddr + 0x5e8);
                         uint8_t maxPass = *reinterpret_cast<uint8_t*>(pvAddr + 0x5ec);
                         int freePassSlot = -1;
