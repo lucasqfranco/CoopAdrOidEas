@@ -1471,13 +1471,27 @@ public:
 #endif
     }
 
-    void evictNpcPedFromWorld(void* ped, void* localPed) {
+    void evictNpcPedFromWorld(void* ped, void* localPed, bool allowMissionPed = false) {
 #if defined(__unix__) || defined(__ANDROID__) || defined(__linux__)
         if (!ped || ped == localPed) return;
         for (int r = 0; r < kMaxCoopPlayers; ++r) {
             if (ped == remotePedPtr_[r]) return;
         }
         uintptr_t pedAddr = reinterpret_cast<uintptr_t>(ped);
+        // JAMÁS matar ni expulsar un personaje de misión ajeno (Big Smoke, Sweet, Ryder, etc., m_nCreatedBy == 2 en +0x548)
+        // para no provocar "Misión fallida" instantánea al subir al vehículo de una misión
+        if (!allowMissionPed && *reinterpret_cast<uint8_t*>(pedAddr + 0x548) == 2) {
+            bool isOurManagedNpc = false;
+            for (int k = 0; k < kMaxSyncedWorldPeds; ++k) {
+                if (ped == worldSyncPedPtr_[k]) { isOurManagedNpc = true; break; }
+            }
+            for (int v = 0; v < kMaxSyncedWorldVehicles; ++v) {
+                if (ped == worldSyncVehDriverPtr_[v]) { isOurManagedNpc = true; break; }
+            }
+            if (!isOurManagedNpc) {
+                return;
+            }
+        }
         if ((*reinterpret_cast<uint8_t*>(pedAddr + 0x585) & 1) != 0) {
             warpPedOutOfVehicle(ped);
         }
@@ -1725,7 +1739,7 @@ public:
                 remoteLastVehSpawnTick_[i] = 0;
                 if (oldRemPed != nullptr && gtaSymbols_.cpoolsGetPedFn && oldRemHandle > 0 &&
                     gtaSymbols_.cpoolsGetPedFn(oldRemHandle) == oldRemPed) {
-                    evictNpcPedFromWorld(oldRemPed, localPed);
+                    evictNpcPedFromWorld(oldRemPed, localPed, true);
                 }
             }
             for (int k = 0; k < kMaxSyncedWorldPeds; ++k) {
@@ -1770,7 +1784,7 @@ public:
                 remoteLastVehSpawnTick_[i] = 0;
                 if (oldRemPed != nullptr && gtaSymbols_.cpoolsGetPedFn && oldRemHandle > 0 &&
                     gtaSymbols_.cpoolsGetPedFn(oldRemHandle) == oldRemPed) {
-                    evictNpcPedFromWorld(oldRemPed, localPed);
+                    evictNpcPedFromWorld(oldRemPed, localPed, true);
                 }
             }
             for (int k = 0; k < kMaxSyncedWorldPeds; ++k) {
@@ -2253,36 +2267,14 @@ public:
                                      localPed, me.seatIndex, me.weaponId);
                             }
                         }
-                        // Activar cámara nativa de Drive-By desde ventanilla (MODE_AIMWEAPON_FROMCAR = 55) en TheCamera
-                        // para que CTaskSimpleGangDriveBy::PlayerTarget marque m_bTargetInRange = 1 (+0x14), saque el torso por la ventanilla
-                        // y muestre la mira 360° exactamente como los miembros de la pandilla en las misiones
-                        if (gtaSymbols_.theCamera != nullptr) {
-                            uintptr_t camBase = reinterpret_cast<uintptr_t>(gtaSymbols_.theCamera);
-                            uint8_t activeCamIdx = *reinterpret_cast<uint8_t*>(camBase + 0x5f);
-                            if (activeCamIdx < 3) {
-                                uintptr_t activeCam = camBase + static_cast<size_t>(activeCamIdx) * 0x228;
-                                uint16_t curCamMode = *reinterpret_cast<uint16_t*>(activeCam + 0x186);
-                                if (curCamMode != 55 /*MODE_AIMWEAPON_FROMCAR*/ &&
-                                    curCamMode != 49 /*MODE_TWOPLAYER_IN_CAR_AND_SHOOTING*/ &&
-                                    curCamMode != 14 /*MODE_FIXED*/ && curCamMode != 15 /*MODE_1STPERSON*/) {
-                                    if (gtaSymbols_.ccameraSetNewPlayerWeaponModeFn) {
-                                        gtaSymbols_.ccameraSetNewPlayerWeaponModeFn(gtaSymbols_.theCamera, 55, 0, 0);
-                                    }
-                                    *reinterpret_cast<uint16_t*>(activeCam + 0x186) = 55;
-                                }
-                            }
-                        }
-                        // Mantener activo el flag de targeting en vehículo (m_nPlayerFlags |= 8 en CPlayerPedData + 0x48)
-                        // y habilitar los botones táctiles de disparo en el HUD móvil (WIDGET_ATTACK=0, SHOOT_LEFT=10, SHOOT_RIGHT=11)
-                        uintptr_t playerData = *reinterpret_cast<uintptr_t*>(localPedAddr + 0x540);
-                        if (playerData != 0) {
-                            *reinterpret_cast<uint16_t*>(playerData + 0x48) |= 0x08u;
-                        }
+                        // NO sobrescribir TheCamera->m_nMode = 55 (MODE_AIMWEAPON_FROMCAR): en GTA SA Mobile ese modo
+                        // bloquea la cámara del pasajero y oculta/conflicta con los controles táctiles normales.
+                        // Dejamos la cámara libre de seguimiento 360° y mostramos ÚNICAMENTE el botón nativo de ataque (WIDGET_ATTACK=0).
                         bool manualFirePressed = false;
                         if (gtaSymbols_.ctouchInterfaceIsHeldDownFn) {
                             if (gtaSymbols_.ctouchInterfaceIsHeldDownFn(0 /*WIDGET_ATTACK*/, 1)) manualFirePressed = true;
-                            if (gtaSymbols_.ctouchInterfaceIsHeldDownFn(10 /*WIDGET_VEHICLE_SHOOT_LEFT*/, 1)) manualFirePressed = true;
-                            if (gtaSymbols_.ctouchInterfaceIsHeldDownFn(11 /*WIDGET_VEHICLE_SHOOT_RIGHT*/, 1)) manualFirePressed = true;
+                            if (gtaSymbols_.ctouchInterfaceIsHeldDownFn(10 /*WIDGET_VEHICLE_SHOOT_LEFT*/, 0)) manualFirePressed = true;
+                            if (gtaSymbols_.ctouchInterfaceIsHeldDownFn(11 /*WIDGET_VEHICLE_SHOOT_RIGHT*/, 0)) manualFirePressed = true;
                         } else if (gtaSymbols_.ctouchInterfaceIsTouchedFn) {
                             if (gtaSymbols_.ctouchInterfaceIsTouchedFn(0 /*WIDGET_ATTACK*/, nullptr, 1)) manualFirePressed = true;
                         }
@@ -2663,13 +2655,15 @@ public:
             }
         }
 
-        // Si el compañero acaba de activar el inicio de misión en la señal roja y estamos cerca (< 25m) pero a un paso del borde,
-        // sincronizar nuestra posición exacta con la señal roja para que ambos entren juntos a la misión en el mismo frame
+        // Si el compañero acaba de activar el inicio de misión en la señal roja y estamos cerca (< 25m en 3D y en el mismo interior/exterior),
+        // sincronizar nuestra posición exacta con la señal roja para que ambos entren juntos a la misión en el mismo frame.
+        // IMPORTANTE: comprobar mdz < 6.0m para JAMÁS teletransportar a alguien desde la calle (Z=13.5) hacia el interior de la casa de CJ (Z=1014.7)
         if (pendingMissionMeetupTeleport_.exchange(false) && !onMission && !myVeh && gtaSymbols_.cpedTeleportFn) {
             float mdx = mission_.checkpointX - myPos.x;
             float mdy = mission_.checkpointY - myPos.y;
+            float mdz = std::fabs(mission_.checkpointZ - myPos.z);
             float mDistSq = mdx * mdx + mdy * mdy;
-            if (mDistSq > (0.5f * 0.5f) && mDistSq < (25.0f * 25.0f) && std::fabs(mission_.checkpointX) > 1.0f) {
+            if (mDistSq > (0.5f * 0.5f) && mDistSq < (25.0f * 25.0f) && mdz < 6.0f && std::fabs(mission_.checkpointX) > 1.0f) {
                 CVector mPos{mission_.checkpointX, mission_.checkpointY, mission_.checkpointZ};
                 gtaSymbols_.cpedTeleportFn(localPed, mPos, 0);
                 me.x = mPos.x;
@@ -3047,6 +3041,8 @@ public:
             // condición de carrera con CdStreamThread (OS_FileSetPosition). CStreaming::Update carga los modelos
             // solicitados por RequestModel de forma asíncrona y segura en el siguiente frame.
             bool canRequestStreamingThisTick = (tickCount % 5 == 0);
+            uint8_t guestAreaCode = *reinterpret_cast<uint8_t*>(localPedAddr + 0x4b);
+            if (guestAreaCode == 0) {
 
             // 1. Instanciar y actualizar en el Guest los peatones reales sincronizados desde el Host (sólo si están a <= 110m del Guest
             //    para jamás instanciar MISSION_CHAR en sectores descargados del mapa que degradarían el streaming del entorno)
@@ -3588,6 +3584,7 @@ public:
                     }
                 }
             }
+            } // end if (guestAreaCode == 0)
 
             // Limpiar cada 15 frames únicamente la zona subterránea de descarte (-600..-400Z);
             // jamás llamar RemoveAllRandomPeds ni ClearCarsFromArea alrededor del jugador para que no desaparezcan peatones ni vehículos
@@ -3627,7 +3624,7 @@ public:
                     remotePedSmoothValid_[i] = false;
                     if (!gtaSymbols_.cpoolsGetPedFn || oldRemHandle <= 0 ||
                         gtaSymbols_.cpoolsGetPedFn(oldRemHandle) == oldRemPed) {
-                        evictNpcPedFromWorld(oldRemPed, localPed);
+                        evictNpcPedFromWorld(oldRemPed, localPed, true);
                     }
                 }
                 if (rem.lastNetworkUpdateMs > 0) {
@@ -3642,7 +3639,8 @@ public:
                 float dy = rem.y - me.y;
                 float dz = rem.z - me.z;
                 float distSq = dx * dx + dy * dy + dz * dz;
-                if (!config_.isHost && distSq > (45.0f * 45.0f) && std::fabs(rem.x) > 1.0f) {
+                if (!config_.isHost && distSq > (45.0f * 45.0f) && std::fabs(rem.x) > 1.0f &&
+                    rem.z < 500.0f && me.z < 500.0f) {
                     CVector meetPos{rem.x, rem.y + 1.85f, rem.z + 0.15f};
                     gtaSymbols_.cpedTeleportFn(localPed, meetPos, 0);
                     me.x = meetPos.x;
